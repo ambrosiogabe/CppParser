@@ -1,5 +1,6 @@
 #include <vector>
 #include <string>
+#include <stdio.h>
 
 namespace Cocoa
 {
@@ -21,19 +22,81 @@ namespace Cocoa
 
 	namespace MyNamespace
 	{
-		void Update(float dt);
+		float m_Member;
+		Vec3 m_Vector;
+
+		inline void Update(float dt)
+		{
+			float verySmallUpdate = dt;
+			m_Member += dt * m_Vector.x;
+		}
+
 		int DoSomething();
 	}
 
 	class ACoolClass
 	{
 	public:
-		ACoolClass();
+		ACoolClass()
+		{
+			m_Vector = new Vec3();
+			m_Vector->x = 10;
+			m_Vector->y = 12;
+			m_Vector->z = 33;
+		}
 
-		void MemberDecl();
+		~ACoolClass()
+		{
+			delete m_Vector;
+		}
+
+		[[deprecated]]
+		void MemberDecl()
+		{
+			printf("This is a deprecated function %d\n", 10);
+		}
+
+		template<typename T>
+		T TemplateAdd(const T& a, const T& b)
+		{
+			return a + b;
+		}
+
+		void* AllocateMemory(size_t size);
 
 	private:
 		float m_Member;
 		const int* m_Member2;
+		Vec3* m_Vector;
 	};
+
+	namespace FizzBuzz
+	{
+		void DoFizzBuzz(int maxNumber)
+		{
+			for (int i = 0; i < maxNumber; i++)
+			{
+				if (i % 3 == 0)
+				{
+					printf("Fizz");
+				}
+				if (i % 5 == 0)
+				{
+					printf("Buzz");
+				}
+				printf("\n");
+			}
+		}
+
+		float Average(std::vector<int> numbers)
+		{
+			float average = 0.0f;
+			for (int num : numbers)
+			{
+				average += (float)num;
+			}
+
+			return average / (int)numbers.size();
+		}
+	}
 }

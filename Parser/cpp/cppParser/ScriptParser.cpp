@@ -10,6 +10,9 @@ namespace CppParser
 		// Internal variables
 		static CPP_PARSER_VECTOR(Token) Tokens;
 		static int CurrentToken = 0;
+		
+		// TODO: You need to implement the preprocessing engine and create a class table otherwise you won't be able to tell if you have a class or
+		// TODO: a variable, which is important when it comes to parsing assignment operations and stuff...
 
 		static AstNode* ParseTranslationUnit();
 
@@ -22,6 +25,13 @@ namespace CppParser
 			return result;
 		}
 
+		// =============================================================================================
+		// Free Node functions (Internal use only)
+		//
+		// These will recursively walk whatever node is passed in and free the memory allocated
+		// by the node itself. These functions will *NOT* free any memory that is contained
+		// within the tokens. So strings that were allocated have to be freed by the scanner.
+		// =============================================================================================
 		static void FreeNodeCallback(AstNode* tree)
 		{
 			FreeMem(tree);
@@ -32,11 +42,32 @@ namespace CppParser
 			WalkTree(node, FreeNodeCallback);
 		}
 
+		static void FreePreprocessingNodeCallback(PreprocessingAstNode* tree)
+		{
+			FreeMem(tree);
+		}
+
+		static void FreePreprocessingNode(PreprocessingAstNode* node)
+		{
+			//WalkPreprocessingTree(node, FreePreprocessingNodeCallback);
+		}
+
+		// =============================================================================================
+		// Free Tree function (public)
+		// 
+		// This will free all memory allocated by the AST tree passed in
+		// =============================================================================================
 		void FreeTree(AstNode* tree)
 		{
 			FreeNode(tree);
 		}
 
+		// ===============================================================================================
+		// Walk Tree functions
+		//
+		// These will recursively walk preprocessing, or regular ast trees and call the callback function
+		// indicated by the notification type
+		// ===============================================================================================
 		void WalkTree(AstNode* tree, void(*callbackFn)(AstNode* node), AstNodeType notificationType)
 		{
 #define WALK(node) WalkTree(node, callbackFn, notificationType)
@@ -858,6 +889,11 @@ namespace CppParser
 #undef WALK
 		}
 
+		// ===============================================================================================
+		// Helper functions (internal)
+		//
+		// These are a collection of functions used to give useful information during parse
+		// ===============================================================================================
 		static bool AtEnd()
 		{
 			return CurrentToken == Tokens.size();
@@ -927,9 +963,87 @@ namespace CppParser
 				type == TokenType::AND_EQUAL || type == TokenType::CARET_EQUAL || type == TokenType::PIPE_EQUAL;
 		}
 
+		static TokenType Peek()
+		{
+			return AtEnd() ? Tokens[Tokens.size() - 1].m_Type : Tokens[CurrentToken].m_Type;
+		}
+
+		static bool PeekIn(std::initializer_list<TokenType> tokenTypes)
+		{
+			if (std::find(tokenTypes.begin(), tokenTypes.end(), Peek()) != tokenTypes.end())
+			{
+				return true;
+			}
+			return false;
+		}
+
+		static bool LookAheadBeforeSemicolon(std::initializer_list<TokenType> tokenTypes)
+		{
+			// This function looks for a token that matches any of the types in the initializer list
+			// before the first semicolon or eof token. If it finds it, it returns true, otherwise false
+			int token = CurrentToken;
+			int tokenTypeSize = tokenTypes.size();
+			while (!AtEnd())
+			{
+				Token& iter = Tokens[token];
+				if (iter.m_Type == TokenType::SEMICOLON)
+				{
+					return false;
+				}
+
+				if (std::find(tokenTypes.begin(), tokenTypes.end(), iter.m_Type) != tokenTypes.end())
+				{
+					return true;
+				}
+				token++;
+				if (token >= Tokens.size())
+				{
+					return false;
+				}
+			}
+		}
+
+		static bool MatchBeforeSemicolon(TokenType type1, TokenType nextType)
+		{
+			// This function looks for a token that matches any of the types in the initializer list
+			// before the first semicolon or eof token. If it finds it, it returns true, otherwise false
+			int token = CurrentToken;
+			while (!AtEnd())
+			{
+				Token& iter = Tokens[token];
+				if (iter.m_Type == TokenType::SEMICOLON)
+				{
+					return false;
+				}
+
+				if (iter.m_Type == type1 && token < Tokens.size() && Tokens[token + 1].m_Type == nextType)
+				{
+					return true;
+				}
+				token++;
+				if (token >= Tokens.size())
+				{
+					return false;
+				}
+			}
+		}
+
+		// ===============================================================================================
+		// Generator functions (internal)
+		//
+		// These are a collection of functions that are used to construct any of the AST node types
+		// ===============================================================================================
 		static AstNode* GenerateAstNode(AstNodeType type)
 		{
 			AstNode* node = (AstNode*)AllocMem(sizeof(AstNode));
+			node->success = true;
+			node->type = type;
+			return node;
+		}
+
+		static PreprocessingAstNode* GeneratePreprocessingAstNode(PreprocessingAstNodeType type)
+		{
+			PreprocessingAstNode* node = (PreprocessingAstNode*)AllocMem(sizeof(PreprocessingAstNode));
 			node->success = true;
 			node->type = type;
 			return node;
@@ -2587,209 +2701,6 @@ namespace CppParser
 			return result;
 		}
 
-		// TODO: Add this stuff in once I write a preprocessing engine
-		/*static AstNode* GeneratePreprocessingFileNode(AstNode* group)
-		{
-			AstNode* result = GenerateAstNode(AstNodeType::PreprocessingFile);
-			result->preprocessingFile.group = group;
-			return result;
-		}
-
-		static AstNode* GenerateGroupNode(AstNode* thisGroupPart, AstNode* nextGroupPart)
-		{
-			AstNode* result = GenerateAstNode(AstNodeType::Group);
-			result->group.thisGroupPart = thisGroupPart;
-			result->group.nextGroupPart = nextGroupPart;
-			return result;
-		}
-
-		static AstNode* GenerateIfSectionNode(AstNode* ifGroup, AstNode* elifGroups, AstNode* elseGroup)
-		{
-			AstNode* result = GenerateAstNode(AstNodeType::IfSection);
-			result->ifSection.ifGroup = ifGroup;
-			result->ifSection.elifGroups = elifGroups;
-			result->ifSection.elseGroup = elseGroup;
-			return result;
-		}
-
-		static AstNode* GenerateIfGroupNode(AstNode* constantExpression, AstNode* group)
-		{
-			AstNode* result = GenerateAstNode(AstNodeType::IfGroup);
-			result->ifGroup.constantExpression = constantExpression;
-			result->ifGroup.group = group;
-			return result;
-		}
-
-		static AstNode* GenerateIfDefGroupNode(Token identifier, AstNode* group)
-		{
-			AstNode* result = GenerateAstNode(AstNodeType::IfDefGroup);
-			result->ifDefGroup.identifier = identifier;
-			result->ifDefGroup.group = group;
-			return result;
-		}
-
-		static AstNode* GenerateIfNDefGroupNode(Token identifier, AstNode* group)
-		{
-			AstNode* result = GenerateAstNode(AstNodeType::IfNDefGroup);
-			result->ifNDefGroup.identifier = identifier;
-			result->ifNDefGroup.group = group;
-			return result;
-		}
-
-		static AstNode* GenerateElifGroupsNode(AstNode* thisElifGroup, AstNode* nextElifGroup)
-		{
-			AstNode* result = GenerateAstNode(AstNodeType::ElifGroups);
-			result->elifGroups.thisElifGroup = thisElifGroup;
-			result->elifGroups.nextElifGroup = nextElifGroup;
-			return result;
-		}
-
-		static AstNode* GenerateElifGroupNode(AstNode* constantExpression, AstNode* group)
-		{
-			AstNode* result = GenerateAstNode(AstNodeType::ElifGroup);
-			result->elifGroup.constantExpression = constantExpression;
-			result->elifGroup.group = group;
-			return result;
-		}
-
-		static AstNode* GenerateElseGroupNode(AstNode* group)
-		{
-			AstNode* result = GenerateAstNode(AstNodeType::ElseGroup);
-			result->elseGroup.group = group;
-			return result;
-		}
-
-		static AstNode* GenerateMacroIncludeNode(AstNode* ppTokens)
-		{
-			AstNode* result = GenerateAstNode(AstNodeType::MacroInclude);
-			result->macroInclude.ppTokens = ppTokens;
-			return result;
-		}
-
-		static AstNode* GenerateMacroDefineNode(Token identifier, AstNode* replacementList)
-		{
-			AstNode* result = GenerateAstNode(AstNodeType::MacroDefine);
-			result->macroDefine.identifier = identifier;
-			result->macroDefine.replacementList = replacementList;
-			return result;
-		}
-
-		static AstNode* GenerateMacroDefineFunctionNode(Token identifier, AstNode* identifierList, AstNode* replacementList)
-		{
-			AstNode* result = GenerateAstNode(AstNodeType::MacroDefineFunction);
-			result->macroDefineFunction.identifier = identifier;
-			result->macroDefineFunction.identifierList = identifierList;
-			result->macroDefineFunction.replacementList = replacementList;
-			return result;
-		}
-
-		static AstNode* GenerateMacroUndefNode(Token identifier)
-		{
-			AstNode* result = GenerateAstNode(AstNodeType::MacroUndef);
-			result->macroUndef.identifier = identifier;
-			return result;
-		}
-
-		static AstNode* GenerateMacroLineNode(AstNode* ppTokens)
-		{
-			AstNode* result = GenerateAstNode(AstNodeType::MacroLine);
-			result->macroLine.ppTokens = ppTokens;
-			return result;
-		}
-
-		static AstNode* GenerateMacroErrorNode(AstNode* ppTokens)
-		{
-			AstNode* result = GenerateAstNode(AstNodeType::MacroError);
-			result->macroError.ppTokens = ppTokens;
-			return result;
-		}
-
-		static AstNode* GenerateMacroPragmaNode(AstNode* ppTokens)
-		{
-			AstNode* result = GenerateAstNode(AstNodeType::MacroPragma);
-			result->macroPragma.ppTokens = ppTokens;
-			return result;
-		}
-
-		static AstNode* GenerateTextLineNode(AstNode* ppTokens)
-		{
-			AstNode* result = GenerateAstNode(AstNodeType::TextLine);
-			result->textLine.ppTokens = ppTokens;
-			return result;
-		}
-
-		static AstNode* GenerateNonDirectiveNode(AstNode* ppTokens)
-		{
-			AstNode* result = GenerateAstNode(AstNodeType::NonDirective);
-			result->nonDirective.ppTokens = ppTokens;
-			return result;
-		}
-
-		static AstNode* GenerateIdentifierListNode(AstNode* thisIdentifierNode, AstNode* nextIdentifierNode)
-		{
-			AstNode* result = GenerateAstNode(AstNodeType::IdentifierList);
-			result->identifierList.thisIdentifierNode = thisIdentifierNode;
-			result->identifierList.nextIdentifierNode = nextIdentifierNode;
-			return result;
-		}
-
-		static AstNode* GenerateIdentifierNode(Token identifier)
-		{
-			AstNode* result = GenerateAstNode(AstNodeType::Identifier);
-			result->identifier.identifier = identifier;
-			return result;
-		}
-
-		static AstNode* GenerateReplacementListNode(AstNode* ppTokens)
-		{
-			AstNode* result = GenerateAstNode(AstNodeType::ReplacementList);
-			result->replacementList.ppTokens = ppTokens;
-			return result;
-		}
-
-		static AstNode* GeneratePPTokensNode(AstNode* preprocessingToken, AstNode* nextPreprocessingToken)
-		{
-			AstNode* result = GenerateAstNode(AstNodeType::PPTokens);
-			result->ppTokens.preprocessingToken = preprocessingToken;
-			result->ppTokens.nextPreprocessingToken = nextPreprocessingToken;
-			return result;
-		}
-
-		static AstNode* GenerateStringLiteralNode(Token stringLiteral)
-		{
-			AstNode* result = GenerateAstNode(AstNodeType::StringLiteral);
-			result->stringLiteral.stringLiteral = stringLiteral;
-			return result;
-		}
-
-		static AstNode* GenerateNumberLiteralNode(Token numberLiteral)
-		{
-			AstNode* result = GenerateAstNode(AstNodeType::NumberLiteral);
-			result->numberLiteral.numberLiteral = numberLiteral;
-			return result;
-		}
-
-		static AstNode* GenerateCharacterLiteralNode(Token characterLiteral)
-		{
-			AstNode* result = GenerateAstNode(AstNodeType::CharacterLiteral);
-			result->characterLiteral.characterLiteral = characterLiteral;
-			return result;
-		}
-
-		static AstNode* GenerateHeaderNameNode(Token identifier)
-		{
-			AstNode* result = GenerateAstNode(AstNodeType::HeaderName);
-			result->headerName.identifier = identifier;
-			return result;
-		}
-
-		static AstNode* GenerateHeaderNameStringNode(Token stringLiteral)
-		{
-			AstNode* result = GenerateAstNode(AstNodeType::HeaderNameString);
-			result->headerNameString.stringLiteral = stringLiteral;
-			return result;
-		}*/
-
 		static AstNode* GenerateNoptrAbstractDeclaratorNode(AstNode* ptrAbstractDeclarator, AstNode* parametersAndQualifiers, AstNode* noptrAbstractDeclarator)
 		{
 			AstNode* result = GenerateAstNode(AstNodeType::NoptrAbstractDeclarator);
@@ -2875,71 +2786,218 @@ namespace CppParser
 			return node;
 		}
 
-		static TokenType Peek()
+		static PreprocessingAstNode* GenerateNoSuccessPreprocessingAstNode()
 		{
-			return AtEnd() ? Tokens[Tokens.size() - 1].m_Type : Tokens[CurrentToken].m_Type;
+			PreprocessingAstNode* node = GeneratePreprocessingAstNode(PreprocessingAstNodeType::None);
+			node->success = false;
+			return node;
 		}
 
-		static bool PeekIn(std::initializer_list<TokenType> tokenTypes)
+		static PreprocessingAstNode* GeneratePreprocessingFileNode(PreprocessingAstNode* group)
 		{
-			if (std::find(tokenTypes.begin(), tokenTypes.end(), Peek()) != tokenTypes.end())
-			{
-				return true;
-			}
-			return false;
+			PreprocessingAstNode* result = GeneratePreprocessingAstNode(PreprocessingAstNodeType::PreprocessingFile);
+			result->preprocessingFile.group = group;
+			return result;
 		}
 
-		static bool LookAheadBeforeSemicolon(std::initializer_list<TokenType> tokenTypes)
+		static PreprocessingAstNode* GenerateGroupNode(PreprocessingAstNode* thisGroupPart, PreprocessingAstNode* nextGroupPart)
 		{
-			// This function looks for a token that matches any of the types in the initializer list
-			// before the first semicolon or eof token. If it finds it, it returns true, otherwise false
-			int token = CurrentToken;
-			int tokenTypeSize = tokenTypes.size();
-			while (!AtEnd())
-			{
-				Token& iter = Tokens[token];
-				if (iter.m_Type == TokenType::SEMICOLON)
-				{
-					return false;
-				}
-
-				if (std::find(tokenTypes.begin(), tokenTypes.end(), iter.m_Type) != tokenTypes.end())
-				{
-					return true;
-				}
-				token++;
-				if (token >= Tokens.size())
-				{
-					return false;
-				}
-			}
+			PreprocessingAstNode* result = GeneratePreprocessingAstNode(PreprocessingAstNodeType::Group);
+			result->group.thisGroupPart = thisGroupPart;
+			result->group.nextGroupPart = nextGroupPart;
+			return result;
 		}
 
-		static bool MatchBeforeSemicolon(TokenType type1, TokenType nextType)
+		static PreprocessingAstNode* GenerateIfSectionNode(PreprocessingAstNode* ifGroup, PreprocessingAstNode* elifGroups, PreprocessingAstNode* elseGroup)
 		{
-			// This function looks for a token that matches any of the types in the initializer list
-			// before the first semicolon or eof token. If it finds it, it returns true, otherwise false
-			int token = CurrentToken;
-			while (!AtEnd())
-			{
-				Token& iter = Tokens[token];
-				if (iter.m_Type == TokenType::SEMICOLON)
-				{
-					return false;
-				}
-
-				if (iter.m_Type == type1 && token < Tokens.size() && Tokens[token + 1].m_Type == nextType)
-				{
-					return true;
-				}
-				token++;
-				if (token >= Tokens.size())
-				{
-					return false;
-				}
-			}
+			PreprocessingAstNode* result = GeneratePreprocessingAstNode(PreprocessingAstNodeType::IfSection);
+			result->ifSection.ifGroup = ifGroup;
+			result->ifSection.elifGroups = elifGroups;
+			result->ifSection.elseGroup = elseGroup;
+			return result;
 		}
 
+		static PreprocessingAstNode* GenerateIfGroupNode(AstNode* constantExpression, PreprocessingAstNode* group)
+		{
+			PreprocessingAstNode* result = GeneratePreprocessingAstNode(PreprocessingAstNodeType::IfGroup);
+			result->ifGroup.constantExpression = constantExpression;
+			result->ifGroup.group = group;
+			return result;
+		}
+
+		static PreprocessingAstNode* GenerateIfDefGroupNode(Token identifier, PreprocessingAstNode* group)
+		{
+			PreprocessingAstNode* result = GeneratePreprocessingAstNode(PreprocessingAstNodeType::IfDefGroup);
+			result->ifDefGroup.identifier = identifier;
+			result->ifDefGroup.group = group;
+			return result;
+		}
+
+		static PreprocessingAstNode* GenerateIfNDefGroupNode(Token identifier, PreprocessingAstNode* group)
+		{
+			PreprocessingAstNode* result = GeneratePreprocessingAstNode(PreprocessingAstNodeType::IfNDefGroup);
+			result->ifNDefGroup.identifier = identifier;
+			result->ifNDefGroup.group = group;
+			return result;
+		}
+
+		static PreprocessingAstNode* GenerateElifGroupsNode(PreprocessingAstNode* thisElifGroup, PreprocessingAstNode* nextElifGroup)
+		{
+			PreprocessingAstNode* result = GeneratePreprocessingAstNode(PreprocessingAstNodeType::ElifGroups);
+			result->elifGroups.thisElifGroup = thisElifGroup;
+			result->elifGroups.nextElifGroup = nextElifGroup;
+			return result;
+		}
+
+		static PreprocessingAstNode* GenerateElifGroupNode(AstNode* constantExpression, PreprocessingAstNode* group)
+		{
+			PreprocessingAstNode* result = GeneratePreprocessingAstNode(PreprocessingAstNodeType::ElifGroup);
+			result->elifGroup.constantExpression = constantExpression;
+			result->elifGroup.group = group;
+			return result;
+		}
+
+		static PreprocessingAstNode* GenerateElseGroupNode(PreprocessingAstNode* group)
+		{
+			PreprocessingAstNode* result = GeneratePreprocessingAstNode(PreprocessingAstNodeType::ElseGroup);
+			result->elseGroup.group = group;
+			return result;
+		}
+
+		static PreprocessingAstNode* GenerateMacroIncludeNode(PreprocessingAstNode* ppTokens)
+		{
+			PreprocessingAstNode* result = GeneratePreprocessingAstNode(PreprocessingAstNodeType::MacroInclude);
+			result->macroInclude.ppTokens = ppTokens;
+			return result;
+		}
+
+		static PreprocessingAstNode* GenerateMacroDefineNode(Token identifier, PreprocessingAstNode* replacementList)
+		{
+			PreprocessingAstNode* result = GeneratePreprocessingAstNode(PreprocessingAstNodeType::MacroDefine);
+			result->macroDefine.identifier = identifier;
+			result->macroDefine.replacementList = replacementList;
+			return result;
+		}
+
+		static PreprocessingAstNode* GenerateMacroDefineFunctionNode(Token identifier, PreprocessingAstNode* identifierList, PreprocessingAstNode* replacementList)
+		{
+			PreprocessingAstNode* result = GeneratePreprocessingAstNode(PreprocessingAstNodeType::MacroDefineFunction);
+			result->macroDefineFunction.identifier = identifier;
+			result->macroDefineFunction.identifierList = identifierList;
+			result->macroDefineFunction.replacementList = replacementList;
+			return result;
+		}
+
+		static PreprocessingAstNode* GenerateMacroUndefNode(Token identifier)
+		{
+			PreprocessingAstNode* result = GeneratePreprocessingAstNode(PreprocessingAstNodeType::MacroUndef);
+			result->macroUndef.identifier = identifier;
+			return result;
+		}
+
+		static PreprocessingAstNode* GenerateMacroLineNode(PreprocessingAstNode* ppTokens)
+		{
+			PreprocessingAstNode* result = GeneratePreprocessingAstNode(PreprocessingAstNodeType::MacroLine);
+			result->macroLine.ppTokens = ppTokens;
+			return result;
+		}
+
+		static PreprocessingAstNode* GenerateMacroErrorNode(PreprocessingAstNode* ppTokens)
+		{
+			PreprocessingAstNode* result = GeneratePreprocessingAstNode(PreprocessingAstNodeType::MacroError);
+			result->macroError.ppTokens = ppTokens;
+			return result;
+		}
+
+		static PreprocessingAstNode* GenerateMacroPragmaNode(PreprocessingAstNode* ppTokens)
+		{
+			PreprocessingAstNode* result = GeneratePreprocessingAstNode(PreprocessingAstNodeType::MacroPragma);
+			result->macroPragma.ppTokens = ppTokens;
+			return result;
+		}
+
+		static PreprocessingAstNode* GenerateTextLineNode(PreprocessingAstNode* ppTokens)
+		{
+			PreprocessingAstNode* result = GeneratePreprocessingAstNode(PreprocessingAstNodeType::TextLine);
+			result->textLine.ppTokens = ppTokens;
+			return result;
+		}
+
+		static PreprocessingAstNode* GenerateNonDirectiveNode(PreprocessingAstNode* ppTokens)
+		{
+			PreprocessingAstNode* result = GeneratePreprocessingAstNode(PreprocessingAstNodeType::NonDirective);
+			result->nonDirective.ppTokens = ppTokens;
+			return result;
+		}
+
+		static PreprocessingAstNode* GenerateIdentifierListNode(PreprocessingAstNode* thisIdentifierNode, PreprocessingAstNode* nextIdentifierNode)
+		{
+			PreprocessingAstNode* result = GeneratePreprocessingAstNode(PreprocessingAstNodeType::IdentifierList);
+			result->identifierList.thisIdentifierNode = thisIdentifierNode;
+			result->identifierList.nextIdentifierNode = nextIdentifierNode;
+			return result;
+		}
+
+		static PreprocessingAstNode* GenerateIdentifierNode(Token identifier)
+		{
+			PreprocessingAstNode* result = GeneratePreprocessingAstNode(PreprocessingAstNodeType::Identifier);
+			result->identifier.identifier = identifier;
+			return result;
+		}
+
+		static PreprocessingAstNode* GenerateReplacementListNode(PreprocessingAstNode* ppTokens)
+		{
+			PreprocessingAstNode* result = GeneratePreprocessingAstNode(PreprocessingAstNodeType::ReplacementList);
+			result->replacementList.ppTokens = ppTokens;
+			return result;
+		}
+
+		static PreprocessingAstNode* GeneratePPTokensNode(PreprocessingAstNode* preprocessingToken, PreprocessingAstNode* nextPreprocessingToken)
+		{
+			PreprocessingAstNode* result = GeneratePreprocessingAstNode(PreprocessingAstNodeType::PPTokens);
+			result->ppTokens.preprocessingToken = preprocessingToken;
+			result->ppTokens.nextPreprocessingToken = nextPreprocessingToken;
+			return result;
+		}
+
+		static PreprocessingAstNode* GenerateStringLiteralNode(Token stringLiteral)
+		{
+			PreprocessingAstNode* result = GeneratePreprocessingAstNode(PreprocessingAstNodeType::StringLiteral);
+			result->stringLiteral.stringLiteral = stringLiteral;
+			return result;
+		}
+
+		static PreprocessingAstNode* GenerateNumberLiteralNode(Token numberLiteral)
+		{
+			PreprocessingAstNode* result = GeneratePreprocessingAstNode(PreprocessingAstNodeType::NumberLiteral);
+			result->numberLiteral.numberLiteral = numberLiteral;
+			return result;
+		}
+
+		static PreprocessingAstNode* GenerateCharacterLiteralNode(Token characterLiteral)
+		{
+			PreprocessingAstNode* result = GeneratePreprocessingAstNode(PreprocessingAstNodeType::CharacterLiteral);
+			result->characterLiteral.characterLiteral = characterLiteral;
+			return result;
+		}
+
+		static PreprocessingAstNode* GenerateHeaderNameNode(Token identifier)
+		{
+			PreprocessingAstNode* result = GeneratePreprocessingAstNode(PreprocessingAstNodeType::HeaderName);
+			result->headerName.identifier = identifier;
+			return result;
+		}
+
+		static PreprocessingAstNode* GenerateHeaderNameStringNode(Token stringLiteral)
+		{
+			PreprocessingAstNode* result = GeneratePreprocessingAstNode(PreprocessingAstNodeType::HeaderNameString);
+			result->headerNameString.stringLiteral = stringLiteral;
+			return result;
+		}
+
+		// ===============================================================================================
+		// Parser Forward Declarations (internal)
+		// ===============================================================================================
 		// Translation Unit
 		static AstNode* ParseTranslationUnit();
 
@@ -3205,38 +3263,45 @@ namespace CppParser
 		static AstNode* ParseTypeIdList();
 		static AstNode* ParseNoexceptSpecification();
 
+		// ===============================================================================================
+		// Parser Preprocessor Forward Declarations (internal)
+		// ===============================================================================================
 		// Preprocessor File
-		// TODO: Add this stuff in once I write a preprocessing engine
-		//static AstNode* ParsePreprocessingFile();
-		//static AstNode* ParseGroup();
-		//static AstNode* ParseGroupPart();
-		//static AstNode* ParseIfSection();
-		//static AstNode* ParseIfGroup();
-		//static AstNode* ParseElifGroups();
-		//static AstNode* ParseElifGroup();
-		//static AstNode* ParseElseGroup();
-		//static AstNode* ParseControlLine();
-		//static AstNode* ParseTextLine();
-		//static AstNode* ParseNonDirective();
-		//static AstNode* ParseIdentifierList();
-		//static AstNode* ParseReplacementList();
-		//static AstNode* ParsePPTokens();
-		//static AstNode* ParseNumberLiteral();
+		static PreprocessingAstNode* ParsePreprocessingFile();
+		static PreprocessingAstNode* ParseGroup();
+		static PreprocessingAstNode* ParseGroupPart();
+		static PreprocessingAstNode* ParseIfSection();
+		static PreprocessingAstNode* ParseIfGroup();
+		static PreprocessingAstNode* ParseElifGroups();
+		static PreprocessingAstNode* ParseElifGroup();
+		static PreprocessingAstNode* ParseElseGroup();
+		static PreprocessingAstNode* ParseControlLine();
+		static PreprocessingAstNode* ParseTextLine();
+		static PreprocessingAstNode* ParseNonDirective();
+		static PreprocessingAstNode* ParseIdentifierList();
+		static PreprocessingAstNode* ParseReplacementList();
+		static PreprocessingAstNode* ParsePPTokens();
+		static PreprocessingAstNode* ParseNumberLiteral();
 
-		//// Preprocessor Stuff
-		//static AstNode* ParsePreprocessingToken();
-		//static AstNode* ParseHeaderName();
-		//static AstNode* ParseCharacterLiteral();
-		//static AstNode* ParseUserDefinedCharacterLiteral();
-		//static AstNode* ParseStringLiteral();
-		//static AstNode* ParseUserDefinedStringLiteral();
-		//static AstNode* ParsePreprocessingOpOrPunc();
-		//static AstNode* ParseHCharSequence();
-		//static AstNode* ParseHChar();
-		//static AstNode* ParseQCharSequence();
-		//static AstNode* ParseQChar();
+		// Preprocessor Stuff
+		static PreprocessingAstNode* ParsePreprocessingToken();
+		static PreprocessingAstNode* ParseHeaderName();
+		static PreprocessingAstNode* ParseCharacterLiteral();
+		static PreprocessingAstNode* ParseUserDefinedCharacterLiteral();
+		static PreprocessingAstNode* ParseStringLiteral();
+		static PreprocessingAstNode* ParseUserDefinedStringLiteral();
+		static PreprocessingAstNode* ParsePreprocessingOpOrPunc();
+		static PreprocessingAstNode* ParseHCharSequence();
+		static PreprocessingAstNode* ParseHChar();
+		static PreprocessingAstNode* ParseQCharSequence();
+		static PreprocessingAstNode* ParseQChar();
 
-		// Implementation -----------------------------------------------------------------------------------------------------------------------------------------
+		// ===============================================================================================
+		// Parser Implementation (internal)
+		//
+		// These implement the grammar rules found at: https://www.nongnu.org/hcb/#decl-specifier-seq
+		// It has been modified where needed.
+		// ===============================================================================================
 		// Translation Unit
 		static AstNode* ParseTranslationUnit()
 		{
@@ -3246,7 +3311,7 @@ namespace CppParser
 		// Expressions
 		static AstNode* ParsePrimaryExpression()
 		{
-			if (Peek() == TokenType::CHARACTER_LITERAL || Peek() == TokenType::FLOATING_POINT_LITERAL || Peek() == TokenType::INTEGER_LITERAL || Peek() == TokenType::STRING_LITERAL)
+			if (PeekIn({ TokenType::CHARACTER_LITERAL, TokenType::FLOATING_POINT_LITERAL, TokenType::INTEGER_LITERAL, TokenType::STRING_LITERAL }))
 			{
 				return GenerateLiteralNode(ConsumeCurrent(Peek()));
 			}
@@ -3277,7 +3342,7 @@ namespace CppParser
 			{
 				return lambdaExpr;
 			}
-			FreeNode(expr);
+			FreeNode(lambdaExpr);
 			BacktrackTo(backtrackPosition);
 
 			return GenerateNoSuccessAstNode();
@@ -4668,11 +4733,11 @@ namespace CppParser
 
 		static AstNode* ParseCompoundStatement()
 		{
-			if (Match(TokenType::LEFT_BRACKET))
+			if (Match(TokenType::LEFT_CURLY_BRACKET))
 			{
 				// Optional
 				AstNode* statementSequence = ParseStatementSequence();
-				Consume(TokenType::RIGHT_BRACKET);
+				Consume(TokenType::RIGHT_CURLY_BRACKET);
 				return GenerateCompoundStatementNode(statementSequence);
 			}
 
@@ -5338,33 +5403,33 @@ namespace CppParser
 		static AstNode* ParseTypeSpecifier()
 		{
 			int backtrackPosition = CurrentToken;
-			// TODO: I'm pretty sure a trailing type specifier needs a semicolon before the next '{'
-			// TODO: Make this a bit smarter, it can also mess up if we hit a '}' before the next '{'
-			if (!LookAheadBeforeSemicolon({ TokenType::LEFT_CURLY_BRACKET }))
+			// TODO: Is this right?
+			if (PeekIn({TokenType::KW_CLASS, TokenType::KW_UNION, TokenType::KW_STRUCT, TokenType::KW_ENUM}) && 
+				LookAheadBeforeSemicolon({ TokenType::LEFT_CURLY_BRACKET }))
 			{
-				AstNode* trailingTypeSpecifier = ParseTrailingTypeSpecifier();
-				if (trailingTypeSpecifier->success)
+				AstNode* classSpecifier = ParseClassSpecifier();
+				if (classSpecifier->success)
 				{
-					return trailingTypeSpecifier;
+					return classSpecifier;
 				}
-				FreeNode(trailingTypeSpecifier);
+				FreeNode(classSpecifier);
+				BacktrackTo(backtrackPosition);
+
+				AstNode* enumSpecifier = ParseEnumSpecifier();
+				if (enumSpecifier->success)
+				{
+					return enumSpecifier;
+				}
+				FreeNode(enumSpecifier);
 				BacktrackTo(backtrackPosition);
 			}
 
-			AstNode* classSpecifier = ParseClassSpecifier();
-			if (classSpecifier->success)
+			AstNode* trailingTypeSpecifier = ParseTrailingTypeSpecifier();
+			if (trailingTypeSpecifier->success)
 			{
-				return classSpecifier;
+				return trailingTypeSpecifier;
 			}
-			FreeNode(classSpecifier);
-			BacktrackTo(backtrackPosition);
-
-			AstNode* enumSpecifier = ParseEnumSpecifier();
-			if (enumSpecifier->success)
-			{
-				return enumSpecifier;
-			}
-			FreeNode(enumSpecifier);
+			FreeNode(trailingTypeSpecifier);
 			BacktrackTo(backtrackPosition);
 
 			return GenerateNoSuccessAstNode();
@@ -8305,489 +8370,495 @@ namespace CppParser
 			return GenerateNoSuccessAstNode();
 		}
 
+		// ===============================================================================================
+		// Parser Preprocessing Implementation (internal)
+		//
+		// These implement the grammar rules found at: https://www.nongnu.org/hcb/#decl-specifier-seq
+		// It has been modified where needed.
+		// ===============================================================================================
 		// Preprocessing Stuff
-		// TODO: Most of this works, but if I want to use it I must create a preprocessing engine
-		//static AstNode* ParsePreprocessingFile()
-		//{
-		//	return GeneratePreprocessingFileNode(ParseGroup());
-		//}
+		static PreprocessingAstNode* ParsePreprocessingFile()
+		{
+			return GeneratePreprocessingFileNode(ParseGroup());
+		}
 
-		//static AstNode* ParseGroup()
-		//{
-		//	int backtrackPosition = CurrentToken;
-		//	AstNode* result = ParseGroupPart();
-		//	if (!result->success)
-		//	{
-		//		FreeNode(result);
-		//		BacktrackTo(backtrackPosition);
-		//	}
+		static PreprocessingAstNode* ParseGroup()
+		{
+			int backtrackPosition = CurrentToken;
+			PreprocessingAstNode* result = ParseGroupPart();
+			if (!result->success)
+			{
+				FreePreprocessingNode(result);
+				BacktrackTo(backtrackPosition);
+			}
 
-		//	while (true)
-		//	{
-		//		AstNode* nextGroup = ParseGroup();
-		//		result = GenerateGroupNode(result, nextGroup);
-		//		if (!nextGroup->success)
-		//		{
-		//			break;
-		//		}
-		//	}
+			while (true)
+			{
+				PreprocessingAstNode* nextGroup = ParseGroup();
+				result = GenerateGroupNode(result, nextGroup);
+				if (!nextGroup->success)
+				{
+					break;
+				}
+			}
 
-		//	return result;
-		//}
+			return result;
+		}
 
-		//static AstNode* ParseGroupPart()
-		//{
-		//	int backtrackPosition = CurrentToken;
-		//	AstNode* ifSection = ParseIfSection();
-		//	if (ifSection->success)
-		//	{
-		//		return ifSection;
-		//	}
-		//	FreeNode(ifSection);
-		//	BacktrackTo(backtrackPosition);
+		static PreprocessingAstNode* ParseGroupPart()
+		{
+			int backtrackPosition = CurrentToken;
+			PreprocessingAstNode* ifSection = ParseIfSection();
+			if (ifSection->success)
+			{
+				return ifSection;
+			}
+			FreePreprocessingNode(ifSection);
+			BacktrackTo(backtrackPosition);
 
-		//	AstNode* controlLine = ParseControlLine();
-		//	if (controlLine->success)
-		//	{
-		//		return controlLine;
-		//	}
-		//	FreeNode(controlLine);
-		//	BacktrackTo(backtrackPosition);
+			PreprocessingAstNode* controlLine = ParseControlLine();
+			if (controlLine->success)
+			{
+				return controlLine;
+			}
+			FreePreprocessingNode(controlLine);
+			BacktrackTo(backtrackPosition);
 
-		//	AstNode* textLine = ParseTextLine();
-		//	if (textLine->success)
-		//	{
-		//		return textLine;
-		//	}
-		//	FreeNode(textLine);
-		//	BacktrackTo(backtrackPosition);
+			PreprocessingAstNode* textLine = ParseTextLine();
+			if (textLine->success)
+			{
+				return textLine;
+			}
+			FreePreprocessingNode(textLine);
+			BacktrackTo(backtrackPosition);
 
-		//	// TODO: Add support for non-directives they look like:
-		//	// TODO: #
-		//	// TODO: a pound symbol followed by a newline
-		//	return GenerateNoSuccessAstNode();
-		//}
+			// TODO: Add support for non-directives they look like:
+			// TODO: #
+			// TODO: a pound symbol followed by a newline
+			return GenerateNoSuccessPreprocessingAstNode();
+		}
 
-		//static AstNode* ParseIfSection()
-		//{
-		//	int backtrackPosition = CurrentToken;
-		//	AstNode* ifGroup = ParseIfGroup();
-		//	if (ifGroup->success)
-		//	{
-		//		// Optional
-		//		AstNode* elifGroups = ParseElifGroups();
-		//		AstNode* elseGroup = ParseElseGroup();
-		//		Consume(TokenType::MACRO_ENDIF);
-		//		return GenerateIfSectionNode(ifGroup, elifGroups, elseGroup);
-		//	}
+		static PreprocessingAstNode* ParseIfSection()
+		{
+			int backtrackPosition = CurrentToken;
+			PreprocessingAstNode* ifGroup = ParseIfGroup();
+			if (ifGroup->success)
+			{
+				// Optional
+				PreprocessingAstNode* elifGroups = ParseElifGroups();
+				PreprocessingAstNode* elseGroup = ParseElseGroup();
+				Consume(TokenType::MACRO_ENDIF);
+				return GenerateIfSectionNode(ifGroup, elifGroups, elseGroup);
+			}
 
-		//	FreeNode(ifGroup);
-		//	BacktrackTo(backtrackPosition);
-		//	return GenerateNoSuccessAstNode();
-		//}
+			FreePreprocessingNode(ifGroup);
+			BacktrackTo(backtrackPosition);
+			return GenerateNoSuccessPreprocessingAstNode();
+		}
 
-		//static AstNode* ParseIfGroup()
-		//{
-		//	int backtrackPosition = CurrentToken;
-		//	if (Match(TokenType::MACRO_IF))
-		//	{
-		//		AstNode* constantExpression = ParseConstantExpression();
-		//		if (constantExpression->success)
-		//		{
-		//			// TODO: Consume a new line here?
-		//			// optional
-		//			AstNode* group = ParseGroup();
-		//			return GenerateIfGroupNode(constantExpression, group);
-		//		}
-		//		FreeNode(constantExpression);
-		//	}
-		//	BacktrackTo(backtrackPosition);
+		static PreprocessingAstNode* ParseIfGroup()
+		{
+			int backtrackPosition = CurrentToken;
+			if (Match(TokenType::MACRO_IF))
+			{
+				AstNode* constantExpression = ParseConstantExpression();
+				if (constantExpression->success)
+				{
+					// TODO: Consume a new line here?
+					// optional
+					PreprocessingAstNode* group = ParseGroup();
+					return GenerateIfGroupNode(constantExpression, group);
+				}
+				FreeNode(constantExpression);
+			}
+			BacktrackTo(backtrackPosition);
 
-		//	if (Match(TokenType::MACRO_IFDEF))
-		//	{
-		//		if (Peek() == TokenType::IDENTIFIER)
-		//		{
-		//			Token identifier = ConsumeCurrent(TokenType::IDENTIFIER);
-		//			// TODO: consume newline here
-		//			// Optional
-		//			AstNode* group = ParseGroup();
-		//			return GenerateIfDefGroupNode(identifier, group);
-		//		}
-		//	}
+			if (Match(TokenType::MACRO_IFDEF))
+			{
+				if (Peek() == TokenType::IDENTIFIER)
+				{
+					Token identifier = ConsumeCurrent(TokenType::IDENTIFIER);
+					// TODO: consume newline here
+					// Optional
+					PreprocessingAstNode* group = ParseGroup();
+					return GenerateIfDefGroupNode(identifier, group);
+				}
+			}
 
-		//	if (Match(TokenType::MACRO_IFNDEF))
-		//	{
-		//		if (Peek() == TokenType::IDENTIFIER)
-		//		{
-		//			Token identifier = ConsumeCurrent(TokenType::IDENTIFIER);
-		//			// TODO: consume newline here
-		//			// Optional
-		//			AstNode* group = ParseGroup();
-		//			return GenerateIfNDefGroupNode(identifier, group);
-		//		}
-		//	}
+			if (Match(TokenType::MACRO_IFNDEF))
+			{
+				if (Peek() == TokenType::IDENTIFIER)
+				{
+					Token identifier = ConsumeCurrent(TokenType::IDENTIFIER);
+					// TODO: consume newline here
+					// Optional
+					PreprocessingAstNode* group = ParseGroup();
+					return GenerateIfNDefGroupNode(identifier, group);
+				}
+			}
 
-		//	BacktrackTo(backtrackPosition);
-		//	return GenerateNoSuccessAstNode();
-		//}
+			BacktrackTo(backtrackPosition);
+			return GenerateNoSuccessPreprocessingAstNode();
+		}
 
-		//static AstNode* ParseElifGroups()
-		//{
-		//	int backtrackPosition = CurrentToken;
-		//	AstNode* result = ParseElifGroup();
-		//	if (!result->success)
-		//	{
-		//		FreeNode(result);
-		//		BacktrackTo(backtrackPosition);
-		//		return GenerateNoSuccessAstNode();
-		//	}
+		static PreprocessingAstNode* ParseElifGroups()
+		{
+			int backtrackPosition = CurrentToken;
+			PreprocessingAstNode* result = ParseElifGroup();
+			if (!result->success)
+			{
+				FreePreprocessingNode(result);
+				BacktrackTo(backtrackPosition);
+				return GenerateNoSuccessPreprocessingAstNode();
+			}
 
-		//	while (true)
-		//	{
-		//		AstNode* nextGroup = ParseElifGroups();
-		//		result = GenerateElifGroupsNode(result, nextGroup);
-		//		if (!nextGroup->success)
-		//		{
-		//			break;
-		//		}
-		//	}
+			while (true)
+			{
+				PreprocessingAstNode* nextGroup = ParseElifGroups();
+				result = GenerateElifGroupsNode(result, nextGroup);
+				if (!nextGroup->success)
+				{
+					break;
+				}
+			}
 
-		//	return GenerateNoSuccessAstNode();
-		//}
+			return GenerateNoSuccessPreprocessingAstNode();
+		}
 
-		//static AstNode* ParseElifGroup()
-		//{
-		//	int backtrackPosition = CurrentToken;
-		//	if (Match(TokenType::MACRO_ELIF))
-		//	{
-		//		AstNode* constantExpression = ParseConstantExpression();
-		//		if (constantExpression->success)
-		//		{
-		//			// TODO: consume newline
-		//			// Optional
-		//			AstNode* group = ParseGroup();
-		//			return GenerateElifGroupNode(constantExpression, group);
-		//		}
-		//		FreeNode(constantExpression);
-		//	}
+		static PreprocessingAstNode* ParseElifGroup()
+		{
+			int backtrackPosition = CurrentToken;
+			if (Match(TokenType::MACRO_ELIF))
+			{
+				AstNode* constantExpression = ParseConstantExpression();
+				if (constantExpression->success)
+				{
+					// TODO: consume newline
+					// Optional
+					PreprocessingAstNode* group = ParseGroup();
+					return GenerateElifGroupNode(constantExpression, group);
+				}
+				FreeNode(constantExpression);
+			}
 
-		//	BacktrackTo(backtrackPosition);
-		//	return GenerateNoSuccessAstNode();
-		//}
+			BacktrackTo(backtrackPosition);
+			return GenerateNoSuccessPreprocessingAstNode();
+		}
 
-		//static AstNode* ParseElseGroup()
-		//{
-		//	int backtrackPosition = CurrentToken;
-		//	if (Match(TokenType::MACRO_ELSE))
-		//	{
-		//		// TODO: consume newline
-		//		// Optional
-		//		AstNode* group = ParseGroup();
-		//		return GenerateElseGroupNode(group);
-		//	}
+		static PreprocessingAstNode* ParseElseGroup()
+		{
+			int backtrackPosition = CurrentToken;
+			if (Match(TokenType::MACRO_ELSE))
+			{
+				// TODO: consume newline
+				// Optional
+				PreprocessingAstNode* group = ParseGroup();
+				return GenerateElseGroupNode(group);
+			}
 
-		//	BacktrackTo(backtrackPosition);
-		//	return GenerateNoSuccessAstNode();
-		//}
+			BacktrackTo(backtrackPosition);
+			return GenerateNoSuccessPreprocessingAstNode();
+		}
 
-		//static AstNode* ParseControlLine()
-		//{
-		//	int backtrackPosition = CurrentToken;
-		//	if (Match(TokenType::MACRO_INCLUDE))
-		//	{
-		//		if (Match(TokenType::LEFT_ANGLE_BRACKET))
-		//		{
-		//			AstNode* ppTokens = ParsePPTokens();
-		//			if (ppTokens->success)
-		//			{
-		//				Consume(TokenType::RIGHT_ANGLE_BRACKET);
-		//				// TODO: Consume newline
-		//				return GenerateMacroIncludeNode(ppTokens);
-		//			}
-		//			FreeNode(ppTokens);
-		//		}
-		//		else
-		//		{
-		//			AstNode* ppTokens = ParsePPTokens();
-		//			if (ppTokens->success)
-		//			{
-		//				// TODO: Consume newline
-		//				return GenerateMacroIncludeNode(ppTokens);
-		//			}
-		//			FreeNode(ppTokens);
-		//		}
-		//	}
-		//	BacktrackTo(backtrackPosition);
+		static PreprocessingAstNode* ParseControlLine()
+		{
+			int backtrackPosition = CurrentToken;
+			if (Match(TokenType::MACRO_INCLUDE))
+			{
+				if (Match(TokenType::LEFT_ANGLE_BRACKET))
+				{
+					PreprocessingAstNode* ppTokens = ParsePPTokens();
+					if (ppTokens->success)
+					{
+						Consume(TokenType::RIGHT_ANGLE_BRACKET);
+						// TODO: Consume newline
+						return GenerateMacroIncludeNode(ppTokens);
+					}
+					FreePreprocessingNode(ppTokens);
+				}
+				else
+				{
+					PreprocessingAstNode* ppTokens = ParsePPTokens();
+					if (ppTokens->success)
+					{
+						// TODO: Consume newline
+						return GenerateMacroIncludeNode(ppTokens);
+					}
+					FreePreprocessingNode(ppTokens);
+				}
+			}
+			BacktrackTo(backtrackPosition);
 
-		//	if (Match(TokenType::MACRO_DEFINE))
-		//	{
-		//		if (Peek() == TokenType::IDENTIFIER)
-		//		{
-		//			Token identifier = ConsumeCurrent(TokenType::IDENTIFIER);
-		//			// TODO: make sure this left parenthisis is not preceded by whitespace
-		//			if (Match(TokenType::LEFT_PAREN))
-		//			{
-		//				AstNode* identifierList = ParseIdentifierList();
-		//				if (identifierList->success)
-		//				{
-		//					Match(TokenType::COMMA);
-		//					if (Match(TokenType::DOT))
-		//					{
-		//						Consume(TokenType::DOT);
-		//						Consume(TokenType::DOT);
-		//					}
-		//				}
+			if (Match(TokenType::MACRO_DEFINE))
+			{
+				if (Peek() == TokenType::IDENTIFIER)
+				{
+					Token identifier = ConsumeCurrent(TokenType::IDENTIFIER);
+					// TODO: make sure this left parenthisis is not preceded by whitespace
+					if (Match(TokenType::LEFT_PAREN))
+					{
+						PreprocessingAstNode* identifierList = ParseIdentifierList();
+						if (identifierList->success)
+						{
+							Match(TokenType::COMMA);
+							if (Match(TokenType::DOT))
+							{
+								Consume(TokenType::DOT);
+								Consume(TokenType::DOT);
+							}
+						}
 
-		//				Consume(TokenType::RIGHT_PAREN);
-		//				AstNode* replacementList = ParseReplacementList();
-		//				if (replacementList->success)
-		//				{
-		//					// TODO: Consume newline
-		//					return GenerateMacroDefineFunctionNode(identifier, identifierList, replacementList);
-		//				}
-		//				FreeNode(replacementList);
-		//				FreeNode(identifierList);
-		//			}
+						Consume(TokenType::RIGHT_PAREN);
+						PreprocessingAstNode* replacementList = ParseReplacementList();
+						if (replacementList->success)
+						{
+							// TODO: Consume newline
+							return GenerateMacroDefineFunctionNode(identifier, identifierList, replacementList);
+						}
+						FreePreprocessingNode(replacementList);
+						FreePreprocessingNode(identifierList);
+					}
 
-		//			AstNode* replacementList = ParseReplacementList();
-		//			if (replacementList->success)
-		//			{
-		//				// TODO: consume newline
-		//				return GenerateMacroDefineNode(identifier, replacementList);
-		//			}
-		//			FreeNode(replacementList);
-		//		}
-		//	}
-		//	BacktrackTo(backtrackPosition);
+					PreprocessingAstNode* replacementList = ParseReplacementList();
+					if (replacementList->success)
+					{
+						// TODO: consume newline
+						return GenerateMacroDefineNode(identifier, replacementList);
+					}
+					FreePreprocessingNode(replacementList);
+				}
+			}
+			BacktrackTo(backtrackPosition);
 
-		//	if (Match(TokenType::MACRO_UNDEF))
-		//	{
-		//		if (Peek() == TokenType::IDENTIFIER)
-		//		{
-		//			Token identifier = ConsumeCurrent(TokenType::IDENTIFIER);
-		//			// TODO: Consume newline
-		//			return GenerateMacroUndefNode(identifier);
-		//		}
-		//	}
-		//	BacktrackTo(backtrackPosition);
+			if (Match(TokenType::MACRO_UNDEF))
+			{
+				if (Peek() == TokenType::IDENTIFIER)
+				{
+					Token identifier = ConsumeCurrent(TokenType::IDENTIFIER);
+					// TODO: Consume newline
+					return GenerateMacroUndefNode(identifier);
+				}
+			}
+			BacktrackTo(backtrackPosition);
 
-		//	if (Match(TokenType::MACRO_LINE))
-		//	{
-		//		AstNode* ppTokens = ParsePPTokens();
-		//		if (ppTokens->success)
-		//		{
-		//			// TODO: consume newline
-		//			return GenerateMacroLineNode(ppTokens);
-		//		}
-		//		FreeNode(ppTokens);
-		//	}
-		//	BacktrackTo(backtrackPosition);
+			if (Match(TokenType::MACRO_LINE))
+			{
+				PreprocessingAstNode* ppTokens = ParsePPTokens();
+				if (ppTokens->success)
+				{
+					// TODO: consume newline
+					return GenerateMacroLineNode(ppTokens);
+				}
+				FreePreprocessingNode(ppTokens);
+			}
+			BacktrackTo(backtrackPosition);
 
-		//	if (Match(TokenType::MACRO_ERROR))
-		//	{
-		//		// Optional
-		//		AstNode* ppTokens = ParsePPTokens();
-		//		// TODO: Consume newline
-		//		return GenerateMacroErrorNode(ppTokens);
-		//	}
+			if (Match(TokenType::MACRO_ERROR))
+			{
+				// Optional
+				PreprocessingAstNode* ppTokens = ParsePPTokens();
+				// TODO: Consume newline
+				return GenerateMacroErrorNode(ppTokens);
+			}
 
-		//	if (Match(TokenType::MACRO_PRAGMA))
-		//	{
-		//		// Optional
-		//		AstNode* ppTokens = ParsePPTokens();
-		//		// TODO: consume newline
-		//		return GenerateMacroPragmaNode(ppTokens);
-		//	}
+			if (Match(TokenType::MACRO_PRAGMA))
+			{
+				// Optional
+				PreprocessingAstNode* ppTokens = ParsePPTokens();
+				// TODO: consume newline
+				return GenerateMacroPragmaNode(ppTokens);
+			}
 
-		//	// TODO: Consume # symbol followed by newline
-		//	return GenerateNoSuccessAstNode();
-		//}
+			// TODO: Consume # symbol followed by newline
+			return GenerateNoSuccessPreprocessingAstNode();
+		}
 
-		//static AstNode* ParseTextLine()
-		//{
-		//	// Optional
-		//	AstNode* ppTokens = ParsePPTokens();
-		//	// TODO: Consume newline
-		//	return GenerateTextLineNode(ppTokens);
-		//}
+		static PreprocessingAstNode* ParseTextLine()
+		{
+			// Optional
+			PreprocessingAstNode* ppTokens = ParsePPTokens();
+			// TODO: Consume newline
+			return GenerateTextLineNode(ppTokens);
+		}
 
-		//static AstNode* ParseNonDirective()
-		//{
-		//	int backtrackPosition = CurrentToken;
-		//	AstNode* ppTokens = ParsePPTokens();
-		//	if (ppTokens->success)
-		//	{
-		//		// TODO: Consume newline
-		//		return GenerateNonDirectiveNode(ppTokens);
-		//	}
+		static PreprocessingAstNode* ParseNonDirective()
+		{
+			int backtrackPosition = CurrentToken;
+			PreprocessingAstNode* ppTokens = ParsePPTokens();
+			if (ppTokens->success)
+			{
+				// TODO: Consume newline
+				return GenerateNonDirectiveNode(ppTokens);
+			}
 
-		//	return GenerateNoSuccessAstNode();
-		//}
+			return GenerateNoSuccessPreprocessingAstNode();
+		}
 
-		//static AstNode* ParseIdentifierList()
-		//{
-		//	if (Peek() == TokenType::IDENTIFIER)
-		//	{
-		//		AstNode* result = GenerateIdentifierNode(ConsumeCurrent(TokenType::IDENTIFIER));
+		static PreprocessingAstNode* ParseIdentifierList()
+		{
+			if (Peek() == TokenType::IDENTIFIER)
+			{
+				PreprocessingAstNode* result = GenerateIdentifierNode(ConsumeCurrent(TokenType::IDENTIFIER));
 
-		//		while (Match(TokenType::COMMA))
-		//		{
-		//			result = GenerateIdentifierListNode(result, ParseIdentifierList());
-		//		}
+				while (Match(TokenType::COMMA))
+				{
+					result = GenerateIdentifierListNode(result, ParseIdentifierList());
+				}
 
-		//		return result;
-		//	}
+				return result;
+			}
 
-		//	return GenerateNoSuccessAstNode();
-		//}
+			return GenerateNoSuccessPreprocessingAstNode();
+		}
 
-		//static AstNode* ParseReplacementList()
-		//{
-		//	// Optional
-		//	AstNode* ppTokens = ParsePPTokens();
-		//	return GenerateReplacementListNode(ppTokens);
-		//}
+		static PreprocessingAstNode* ParseReplacementList()
+		{
+			// Optional
+			PreprocessingAstNode* ppTokens = ParsePPTokens();
+			return GenerateReplacementListNode(ppTokens);
+		}
 
-		//static AstNode* ParsePPTokens()
-		//{
-		//	int backtrackPosition = CurrentToken;
-		//	AstNode* result = ParsePreprocessingToken();
-		//	if (!result->success)
-		//	{
-		//		FreeNode(result);
-		//		BacktrackTo(backtrackPosition);
-		//		return GenerateNoSuccessAstNode();
-		//	}
+		static PreprocessingAstNode* ParsePPTokens()
+		{
+			int backtrackPosition = CurrentToken;
+			PreprocessingAstNode* result = ParsePreprocessingToken();
+			if (!result->success)
+			{
+				FreePreprocessingNode(result);
+				BacktrackTo(backtrackPosition);
+				return GenerateNoSuccessPreprocessingAstNode();
+			}
 
-		//	while (true)
-		//	{
-		//		AstNode* nextPPToken = ParsePPTokens();
-		//		result = GeneratePPTokensNode(result, nextPPToken);
-		//		if (!nextPPToken->success)
-		//		{
-		//			break;
-		//		}
-		//	}
+			while (true)
+			{
+				PreprocessingAstNode* nextPPToken = ParsePPTokens();
+				result = GeneratePPTokensNode(result, nextPPToken);
+				if (!nextPPToken->success)
+				{
+					break;
+				}
+			}
 
-		//	return result;
-		//}
+			return result;
+		}
 
-		//static AstNode* ParseNumberLiteral()
-		//{
-		//	if (Peek() == TokenType::FLOATING_POINT_LITERAL || Peek() == TokenType::INTEGER_LITERAL)
-		//	{
-		//		return GenerateNumberLiteralNode(ConsumeCurrent(Peek()));
-		//	}
+		static PreprocessingAstNode* ParseNumberLiteral()
+		{
+			if (Peek() == TokenType::FLOATING_POINT_LITERAL || Peek() == TokenType::INTEGER_LITERAL)
+			{
+				return GenerateNumberLiteralNode(ConsumeCurrent(Peek()));
+			}
 
-		//	return GenerateNoSuccessAstNode();
-		//}
+			return GenerateNoSuccessPreprocessingAstNode();
+		}
 
-		//// Preprocessor Stuff
-		//static AstNode* ParsePreprocessingToken()
-		//{
-		//	//if (Match(TokenType::NEWLINE))
-		//	//{
-		//	//	return GenerateNoSuccessAstNode();
-		//	//}
+		// Preprocessor Stuff
+		static PreprocessingAstNode* ParsePreprocessingToken()
+		{
+			//if (Match(TokenType::NEWLINE))
+			//{
+			//	return GenerateNoSuccessPreprocessingAstNode();
+			//}
 
-		//	int backtrackPosition = CurrentToken;
-		//	AstNode* headerName = ParseHeaderName();
-		//	if (headerName->success)
-		//	{
-		//		return headerName;
-		//	}
-		//	FreeNode(headerName);
-		//	BacktrackTo(backtrackPosition);
+			int backtrackPosition = CurrentToken;
+			PreprocessingAstNode* headerName = ParseHeaderName();
+			if (headerName->success)
+			{
+				return headerName;
+			}
+			FreePreprocessingNode(headerName);
+			BacktrackTo(backtrackPosition);
 
-		//	if (Peek() == TokenType::IDENTIFIER)
-		//	{
-		//		return GenerateIdentifierNode(ConsumeCurrent(TokenType::IDENTIFIER));
-		//	}
+			if (Peek() == TokenType::IDENTIFIER)
+			{
+				return GenerateIdentifierNode(ConsumeCurrent(TokenType::IDENTIFIER));
+			}
 
-		//	AstNode* numberLiteral = ParseNumberLiteral();
-		//	if (numberLiteral->success)
-		//	{
-		//		return numberLiteral;
-		//	}
-		//	FreeNode(numberLiteral);
-		//	BacktrackTo(backtrackPosition);
+			PreprocessingAstNode* numberLiteral = ParseNumberLiteral();
+			if (numberLiteral->success)
+			{
+				return numberLiteral;
+			}
+			FreePreprocessingNode(numberLiteral);
+			BacktrackTo(backtrackPosition);
 
-		//	AstNode* characterLiteral = ParseCharacterLiteral();
-		//	if (characterLiteral->success)
-		//	{
-		//		return characterLiteral;
-		//	}
-		//	FreeNode(characterLiteral);
-		//	BacktrackTo(backtrackPosition);
+			PreprocessingAstNode* characterLiteral = ParseCharacterLiteral();
+			if (characterLiteral->success)
+			{
+				return characterLiteral;
+			}
+			FreePreprocessingNode(characterLiteral);
+			BacktrackTo(backtrackPosition);
 
-		//	AstNode* stringLiteral = ParseStringLiteral();
-		//	if (stringLiteral->success)
-		//	{
-		//		return stringLiteral;
-		//	}
-		//	FreeNode(stringLiteral);
-		//	BacktrackTo(backtrackPosition);
+			PreprocessingAstNode* stringLiteral = ParseStringLiteral();
+			if (stringLiteral->success)
+			{
+				return stringLiteral;
+			}
+			FreePreprocessingNode(stringLiteral);
+			BacktrackTo(backtrackPosition);
 
-		//	if (Match(TokenType::DOT))
-		//	{
-		//		return GenerateEmptyStatementNode();
-		//	}
+			if (Match(TokenType::DOT))
+			{
+				// TODO: Replace this with the correct node
+				return GenerateNoSuccessPreprocessingAstNode();// GenerateEmptyStatementNode();
+			}
 
-		//	// TODO: Should I do this...?
-		//	//AstNode* preprocessingOpOrPunc = ParsePreprocessingOpOrPunc();
-		//	//if (preprocessingOpOrPunc->success)
-		//	//{
-		//	//	return preprocessingOpOrPunc;
-		//	//}
-		//	//FreeNode(preprocessingOpOrPunc);
-		//	//BacktrackTo(backtrackPosition);
+			// TODO: Should I do this...?
+			//PreprocessingAstNode* preprocessingOpOrPunc = ParsePreprocessingOpOrPunc();
+			//if (preprocessingOpOrPunc->success)
+			//{
+			//	return preprocessingOpOrPunc;
+			//}
+			//FreePreprocessingNode(preprocessingOpOrPunc);
+			//BacktrackTo(backtrackPosition);
 
-		//	return GenerateNoSuccessAstNode();
-		//}
+			return GenerateNoSuccessPreprocessingAstNode();
+		}
 
-		//static AstNode* ParseHeaderName()
-		//{
-		//	if (Peek() == TokenType::LEFT_ANGLE_BRACKET)
-		//	{
-		//		Token identifier = ConsumeCurrent(TokenType::IDENTIFIER);
-		//		Consume(TokenType::RIGHT_ANGLE_BRACKET);
-		//		return GenerateHeaderNameNode(identifier);
-		//	}
+		static PreprocessingAstNode* ParseHeaderName()
+		{
+			if (Peek() == TokenType::LEFT_ANGLE_BRACKET)
+			{
+				Token identifier = ConsumeCurrent(TokenType::IDENTIFIER);
+				Consume(TokenType::RIGHT_ANGLE_BRACKET);
+				return GenerateHeaderNameNode(identifier);
+			}
 
-		//	if (Peek() == TokenType::STRING_LITERAL)
-		//	{
-		//		Token stringLiteral = ConsumeCurrent(TokenType::STRING_LITERAL);
-		//		return GenerateHeaderNameStringNode(stringLiteral);
-		//	}
+			if (Peek() == TokenType::STRING_LITERAL)
+			{
+				Token stringLiteral = ConsumeCurrent(TokenType::STRING_LITERAL);
+				return GenerateHeaderNameStringNode(stringLiteral);
+			}
 
-		//	return GenerateNoSuccessAstNode();
-		//}
+			return GenerateNoSuccessPreprocessingAstNode();
+		}
 
-		//static AstNode* ParseCharacterLiteral()
-		//{
-		//	if (Peek() == TokenType::CHARACTER_LITERAL)
-		//	{
-		//		return GenerateCharacterLiteralNode(ConsumeCurrent(TokenType::CHARACTER_LITERAL));
-		//	}
-		//	return GenerateNoSuccessAstNode();
-		//}
+		static PreprocessingAstNode* ParseCharacterLiteral()
+		{
+			if (Peek() == TokenType::CHARACTER_LITERAL)
+			{
+				return GenerateCharacterLiteralNode(ConsumeCurrent(TokenType::CHARACTER_LITERAL));
+			}
+			return GenerateNoSuccessPreprocessingAstNode();
+		}
 
-		//static AstNode* ParseStringLiteral()
-		//{
-		//	if (Peek() == TokenType::STRING_LITERAL)
-		//	{
-		//		Token stringLiteral = ConsumeCurrent(TokenType::STRING_LITERAL);
-		//		return GenerateStringLiteralNode(stringLiteral);
-		//	}
+		static PreprocessingAstNode* ParseStringLiteral()
+		{
+			if (Peek() == TokenType::STRING_LITERAL)
+			{
+				Token stringLiteral = ConsumeCurrent(TokenType::STRING_LITERAL);
+				return GenerateStringLiteralNode(stringLiteral);
+			}
 
-		//	return GenerateNoSuccessAstNode();
-		//}
+			return GenerateNoSuccessPreprocessingAstNode();
+		}
 
-		// TODO: Should I do these...?
-		// static AstNode* ParsePreprocessingOpOrPunc();
-		// static AstNode* ParseHCharSequence();
-		// static AstNode* ParseHChar();
-		// static AstNode* ParseQCharSequence();
-		// static AstNode* ParseQChar();
+		 // TODO: Should I do these...?
+		 static PreprocessingAstNode* ParsePreprocessingOpOrPunc();
+		 static PreprocessingAstNode* ParseHCharSequence();
+		 static PreprocessingAstNode* ParseHChar();
+		 static PreprocessingAstNode* ParseQCharSequence();
+		 static PreprocessingAstNode* ParseQChar();
 	}
 }

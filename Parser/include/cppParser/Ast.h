@@ -3,6 +3,39 @@
 namespace CppParser
 {
 	struct AstNode;
+	struct PreprocessingAstNode;
+	enum class PreprocessingAstNodeType
+	{
+		None,
+		PreprocessingFile,
+		Group,
+		IfSection,
+		IfGroup,
+		IfDefGroup,
+		IfNDefGroup,
+		ElifGroups,
+		ElifGroup,
+		ElseGroup,
+		MacroInclude,
+		MacroDefine,
+		MacroDefineFunction,
+		MacroUndef,
+		MacroLine,
+		MacroError,
+		MacroPragma,
+		TextLine,
+		NonDirective,
+		Identifier,
+		IdentifierList,
+		ReplacementList,
+		PPTokens,
+		NumberLiteral,
+		StringLiteral,
+		CharacterLiteral,
+		HeaderName,
+		HeaderNameString,
+	};
+
 	enum class AstNodeType
 	{
 		None,
@@ -222,36 +255,6 @@ namespace CppParser
 		TypeTemplateParameter,
 		TypeTypenameParameter,
 		TypeClassParameter,
-
-		// Preprocessing Stuff
-		// TODO: Add this stuff in once I get around to writing a preprocessing engine
-		//PreprocessingFile,
-		//Group,
-		//IfSection,
-		//IfGroup,
-		//IfDefGroup,
-		//IfNDefGroup,
-		//ElifGroups,
-		//ElifGroup,
-		//ElseGroup,
-		//MacroInclude,
-		//MacroDefine,
-		//MacroDefineFunction,
-		//MacroUndef,
-		//MacroLine,
-		//MacroError,
-		//MacroPragma,
-		//TextLine,
-		//NonDirective,
-		//Identifier,
-		//IdentifierList,
-		//ReplacementList,
-		//PPTokens,
-		//NumberLiteral,
-		//StringLiteral,
-		//CharacterLiteral,
-		//HeaderName,
-		//HeaderNameString,
 		Empty,
 	};
 
@@ -457,154 +460,6 @@ namespace CppParser
 		AstNode* ptrAbstractDeclarator;
 		AstNode* parametersAndQualifiers;
 		AstNode* noptrAbstractDeclarator;
-	};
-
-	struct HeaderNameStringNode
-	{
-		Token stringLiteral;
-	};
-
-	struct HeaderNameNode
-	{
-		Token identifier;
-	};
-
-	struct CharacterLiteralNode
-	{
-		Token characterLiteral;
-	};
-
-	struct StringLiteralNode
-	{
-		Token stringLiteral;
-	};
-
-	struct NumberLiteralNode
-	{
-		Token numberLiteral;
-	};
-
-	struct PPTokensNode
-	{
-		AstNode* preprocessingToken;
-		AstNode* nextPreprocessingToken;
-	};
-
-	struct ReplacementListNode
-	{
-		AstNode* ppTokens;
-	};
-
-	struct IdentifierListNode
-	{
-		AstNode* thisIdentifierNode;
-		AstNode* nextIdentifierNode;
-	};
-
-	struct IdentifierNode
-	{
-		Token identifier;
-	};
-
-	struct NonDirectiveNode
-	{
-		AstNode* ppTokens;
-	};
-
-	struct TextLineNode
-	{
-		AstNode* ppTokens;
-	};
-
-	struct MacroPragmaNode
-	{
-		AstNode* ppTokens;
-	};
-
-	struct MacroErrorNode
-	{
-		AstNode* ppTokens;
-	};
-
-	struct MacroLineNode
-	{
-		AstNode* ppTokens;
-	};
-
-	struct MacroUndefNode
-	{
-		Token identifier;
-	};
-
-	struct MacroDefineFunctionNode
-	{
-		Token identifier;
-		AstNode* identifierList;
-		AstNode* replacementList;
-	};
-
-	struct MacroDefineNode
-	{
-		Token identifier;
-		AstNode* replacementList;
-	};
-
-	struct MacroIncludeNode
-	{
-		AstNode* ppTokens;
-	};
-
-	struct ElseGroupNode
-	{
-		AstNode* group;
-	};
-
-	struct ElifGroupNode
-	{
-		AstNode* constantExpression;
-		AstNode* group;
-	};
-
-	struct ElifGroupsNode
-	{
-		AstNode* thisElifGroup;
-		AstNode* nextElifGroup;
-	};
-
-	struct IfNDefGroupNode
-	{
-		Token identifier;
-		AstNode* group;
-	};
-
-	struct IfDefGroupNode
-	{
-		Token identifier;
-		AstNode* group;
-	};
-
-	struct IfGroupNode
-	{
-		AstNode* constantExpression;
-		AstNode* group;
-	};
-
-	struct IfSectionNode
-	{
-		AstNode* ifGroup;
-		AstNode* elifGroups;
-		AstNode* elseGroup;
-	};
-
-	struct GroupNode
-	{
-		AstNode* thisGroupPart;
-		AstNode* nextGroupPart;
-	};
-
-	struct PreprocessingFileNode
-	{
-		AstNode* group;
 	};
 
 	struct NoexceptExpressionNode
@@ -1790,8 +1645,8 @@ namespace CppParser
 
 	struct AstNode
 	{
-		AstNode() {};
-		~AstNode() {};
+		AstNode() {}
+		~AstNode() {}
 
 		AstNodeType type;
 		bool success;
@@ -2008,36 +1863,195 @@ namespace CppParser
 			TypeTemplateParameterNode typeTemplateParameter;
 			TypeTypenameParameterNode typeTypenameParameter;
 			TypeClassParameterNode typeClassParameter;
+		};
+	};
 
+	struct HeaderNameStringNode
+	{
+		Token stringLiteral;
+	};
+
+	struct HeaderNameNode
+	{
+		Token identifier;
+	};
+
+	struct CharacterLiteralNode
+	{
+		Token characterLiteral;
+	};
+
+	struct StringLiteralNode
+	{
+		Token stringLiteral;
+	};
+
+	struct NumberLiteralNode
+	{
+		Token numberLiteral;
+	};
+
+	struct PPTokensNode
+	{
+		PreprocessingAstNode* preprocessingToken;
+		PreprocessingAstNode* nextPreprocessingToken;
+	};
+
+	struct ReplacementListNode
+	{
+		PreprocessingAstNode* ppTokens;
+	};
+
+	struct IdentifierListNode
+	{
+		PreprocessingAstNode* thisIdentifierNode;
+		PreprocessingAstNode* nextIdentifierNode;
+	};
+
+	struct IdentifierNode
+	{
+		Token identifier;
+	};
+
+	struct NonDirectiveNode
+	{
+		PreprocessingAstNode* ppTokens;
+	};
+
+	struct TextLineNode
+	{
+		PreprocessingAstNode* ppTokens;
+	};
+
+	struct MacroPragmaNode
+	{
+		PreprocessingAstNode* ppTokens;
+	};
+
+	struct MacroErrorNode
+	{
+		PreprocessingAstNode* ppTokens;
+	};
+
+	struct MacroLineNode
+	{
+		PreprocessingAstNode* ppTokens;
+	};
+
+	struct MacroUndefNode
+	{
+		Token identifier;
+	};
+
+	struct MacroDefineFunctionNode
+	{
+		Token identifier;
+		PreprocessingAstNode* identifierList;
+		PreprocessingAstNode* replacementList;
+	};
+
+	struct MacroDefineNode
+	{
+		Token identifier;
+		PreprocessingAstNode* replacementList;
+	};
+
+	struct MacroIncludeNode
+	{
+		PreprocessingAstNode* ppTokens;
+	};
+
+	struct ElseGroupNode
+	{
+		PreprocessingAstNode* group;
+	};
+
+	struct ElifGroupNode
+	{
+		AstNode* constantExpression;
+		PreprocessingAstNode* group;
+	};
+
+	struct ElifGroupsNode
+	{
+		PreprocessingAstNode* thisElifGroup;
+		PreprocessingAstNode* nextElifGroup;
+	};
+
+	struct IfNDefGroupNode
+	{
+		Token identifier;
+		PreprocessingAstNode* group;
+	};
+
+	struct IfDefGroupNode
+	{
+		Token identifier;
+		PreprocessingAstNode* group;
+	};
+
+	struct IfGroupNode
+	{
+		AstNode* constantExpression;
+		PreprocessingAstNode* group;
+	};
+
+	struct IfSectionNode
+	{
+		PreprocessingAstNode* ifGroup;
+		PreprocessingAstNode* elifGroups;
+		PreprocessingAstNode* elseGroup;
+	};
+
+	struct GroupNode
+	{
+		PreprocessingAstNode* thisGroupPart;
+		PreprocessingAstNode* nextGroupPart;
+	};
+
+	struct PreprocessingFileNode
+	{
+		PreprocessingAstNode* group;
+	};
+
+	struct PreprocessingAstNode
+	{
+		PreprocessingAstNode() {}
+		~PreprocessingAstNode() {}
+
+		PreprocessingAstNodeType type;
+		bool success;
+
+		union
+		{
 			// Preprocessing Stuff
-			// TODO: Add this stuff in once I write a preprocessing engine
-			//PreprocessingFileNode preprocessingFile;
-			//GroupNode group;
-			//IfSectionNode ifSection;
-			//IfGroupNode ifGroup;
-			//IfDefGroupNode ifDefGroup;
-			//IfNDefGroupNode ifNDefGroup;
-			//ElifGroupsNode elifGroups;
-			//ElifGroupNode elifGroup;
-			//ElseGroupNode elseGroup;
-			//MacroIncludeNode macroInclude;
-			//MacroDefineNode macroDefine;
-			//MacroDefineFunctionNode macroDefineFunction;
-			//MacroUndefNode macroUndef;
-			//MacroLineNode macroLine;
-			//MacroErrorNode macroError;
-			//MacroPragmaNode macroPragma;
-			//TextLineNode textLine;
-			//NonDirectiveNode nonDirective;
-			//IdentifierListNode identifierList;
-			//IdentifierNode identifier;
-			//ReplacementListNode replacementList;
-			//PPTokensNode ppTokens;
-			//StringLiteralNode stringLiteral;
-			//NumberLiteralNode numberLiteral;
-			//CharacterLiteralNode characterLiteral;
-			//HeaderNameNode headerName;
-			//HeaderNameStringNode headerNameString;
+			PreprocessingFileNode preprocessingFile;
+			GroupNode group;
+			IfSectionNode ifSection;
+			IfGroupNode ifGroup;
+			IfDefGroupNode ifDefGroup;
+			IfNDefGroupNode ifNDefGroup;
+			ElifGroupsNode elifGroups;
+			ElifGroupNode elifGroup;
+			ElseGroupNode elseGroup;
+			MacroIncludeNode macroInclude;
+			MacroDefineNode macroDefine;
+			MacroDefineFunctionNode macroDefineFunction;
+			MacroUndefNode macroUndef;
+			MacroLineNode macroLine;
+			MacroErrorNode macroError;
+			MacroPragmaNode macroPragma;
+			TextLineNode textLine;
+			NonDirectiveNode nonDirective;
+			IdentifierListNode identifierList;
+			IdentifierNode identifier;
+			ReplacementListNode replacementList;
+			PPTokensNode ppTokens;
+			StringLiteralNode stringLiteral;
+			NumberLiteralNode numberLiteral;
+			CharacterLiteralNode characterLiteral;
+			HeaderNameNode headerName;
+			HeaderNameStringNode headerNameString;
 		};
 	};
 }
