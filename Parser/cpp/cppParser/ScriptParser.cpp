@@ -2,13 +2,14 @@
 #include "cppParser/CppTokens.h"
 #include "cppParser/Ast.h"
 #include "cppParser/ScriptScanner.h"
+#include "cppParser/Logger.h"
 
 namespace CppParser
 {
 	namespace Parser
 	{
 		// Internal variables
-		static CPP_PARSER_VECTOR(Token) Tokens;
+		static std::vector<Token> Tokens;
 		static int CurrentToken = 0;
 		
 		// TODO: You need to implement the preprocessing engine and create a class table otherwise you won't be able to tell if you have a class or
@@ -16,7 +17,7 @@ namespace CppParser
 
 		static AstNode* ParseTranslationUnit();
 
-		AstNode* Parse(CPP_PARSER_VECTOR(Token)& tokens)
+		AstNode* Parse(std::vector<Token>& tokens)
 		{
 			CurrentToken = 0;
 			Tokens = tokens;
@@ -878,7 +879,7 @@ namespace CppParser
 			case AstNodeType::All:
 				break;
 			default:
-				CPP_PARSER_LOG_ERROR("Unknown tree node type: '%d' while walking tree.", (int)tree->type);
+				Logger::Error("Unknown tree node type: '%d' while walking tree.", (int)tree->type);
 				break;
 			}
 
@@ -902,7 +903,7 @@ namespace CppParser
 		static void ErrorAtToken()
 		{
 			Token& currentToken = AtEnd() ? Tokens[Tokens.size() - 1] : Tokens[CurrentToken];
-			CPP_PARSER_LOG_ERROR("Unexpected token '%s' at line %d:%d", ScriptScanner::TokenName(currentToken.m_Type), currentToken.m_Line, currentToken.m_Column);
+			Logger::Error("Unexpected token '%s' at line %d:%d", ScriptScanner::TokenName(currentToken.m_Type), currentToken.m_Line, currentToken.m_Column);
 		}
 
 		static void Consume(TokenType type)
@@ -914,13 +915,13 @@ namespace CppParser
 				return;
 			}
 
-			CPP_PARSER_LOG_ERROR("Unexpected token. Expected '%s' instead got '%s' at line: %d:%d", ScriptScanner::TokenName(type),
+			Logger::Error("Unexpected token. Expected '%s' instead got '%s' at line: %d:%d", ScriptScanner::TokenName(type),
 				ScriptScanner::TokenName(currentToken.m_Type), currentToken.m_Line, currentToken.m_Column);
 		}
 
 		static void BacktrackTo(int position)
 		{
-			CPP_PARSER_LOG_ASSERT(position >= 0 && position < Tokens.size(), "Invalid backtrack location.");
+			Logger::Assert(position >= 0 && position < Tokens.size(), "Invalid backtrack location.");
 			CurrentToken = position;
 		}
 
@@ -945,7 +946,7 @@ namespace CppParser
 				return currentToken;
 			}
 
-			CPP_PARSER_LOG_ERROR("Unexpected token. Expected '%s' instead got '%s'",
+			Logger::Error("Unexpected token. Expected '%s' instead got '%s'",
 				ScriptScanner::TokenName(type),
 				ScriptScanner::TokenName(currentToken.m_Type));
 			return currentToken;
@@ -982,7 +983,7 @@ namespace CppParser
 			// This function looks for a token that matches any of the types in the initializer list
 			// before the first semicolon or eof token. If it finds it, it returns true, otherwise false
 			int token = CurrentToken;
-			int tokenTypeSize = tokenTypes.size();
+			size_t tokenTypeSize = tokenTypes.size();
 			while (!AtEnd())
 			{
 				Token& iter = Tokens[token];
@@ -1001,6 +1002,8 @@ namespace CppParser
 					return false;
 				}
 			}
+
+			return false;
 		}
 
 		static bool MatchBeforeSemicolon(TokenType type1, TokenType nextType)
@@ -1026,6 +1029,8 @@ namespace CppParser
 					return false;
 				}
 			}
+
+			return false;
 		}
 
 		// ===============================================================================================
@@ -4763,7 +4768,7 @@ namespace CppParser
 				result = GenerateStatementSequenceNode(result, nextStatement->success ? nextStatement : GenerateNoSuccessAstNode());
 			} while (nextStatement && nextStatement->success);
 
-			CPP_PARSER_LOG_ASSERT(nextStatement != nullptr, "Something went horribly wrong when parsing a statement sequence.");
+			Logger::Assert(nextStatement != nullptr, "Something went horribly wrong when parsing a statement sequence.");
 			FreeNode(nextStatement);
 			BacktrackTo(backtrackPosition);
 			return result;
@@ -7788,7 +7793,7 @@ namespace CppParser
 				if (Peek() == TokenType::STRING_LITERAL)
 				{
 					Token token = ConsumeCurrent(TokenType::STRING_LITERAL);
-					CPP_PARSER_LOG_ASSERT(ParserString::StringLength(token.m_Lexeme) == 0, "Invalid custom overloaded operator. Syntax is 'operator\"\" identifier'");
+					Logger::Assert(ParserString::StringLength(token.m_Lexeme) == 0, "Invalid custom overloaded operator. Syntax is 'operator\"\" identifier'");
 					if (Peek() == TokenType::IDENTIFIER)
 					{
 						Token identifier = ConsumeCurrent(TokenType::IDENTIFIER);

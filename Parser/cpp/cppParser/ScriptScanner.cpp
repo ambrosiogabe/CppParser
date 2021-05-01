@@ -1,5 +1,7 @@
 #include "cppParser/ScriptScanner.h"
 #include "cppParser/CppTokens.h"
+#include "cppParser/Logger.h"
+#include "cppParser/FileIO.h"
 
 #include <unordered_map>
 
@@ -10,7 +12,7 @@ namespace CppParser
 		// Internal Variables
 		static int m_Cursor;
 		static std::string m_FileContents;
-		static CPP_PARSER_PATH m_Filepath;
+		static const char* m_Filepath;
 		static int m_FileContentsSize;
 		static int m_Line;
 		static int m_Column;
@@ -372,14 +374,14 @@ namespace CppParser
 			return iter->second;
 		}
 
-		CPP_PARSER_VECTOR(Token) ScanTokens(const CPP_PARSER_PATH& filepath, bool includeWhitespace)
+		std::vector<Token> ScanTokens(const char* filepath, bool includeWhitespace)
 		{
 			auto tokens = std::vector<Token>();
-			CPP_PARSER_LOG("Scanning file '%s'", CPP_PARSER_GET_PATH_CSTR(filepath));
-			char* rawFileContents = CPP_PARSER_READ_FILE(CPP_PARSER_GET_PATH_CSTR(filepath));
+			Logger::Log("Scanning file '%s'", filepath);
+			char* rawFileContents = FileIO::DefaultReadFile(filepath);
 			m_FileContents = std::string(rawFileContents);
 			m_Filepath = filepath;
-			m_FileContentsSize = m_FileContents.length();
+			m_FileContentsSize = (int)m_FileContents.length();
 			m_Line = 1;
 			m_Column = 0;
 			m_Start = 0;
@@ -402,15 +404,15 @@ namespace CppParser
 
 			tokens.emplace_back(Token{ m_Line, m_Column, TokenType::END_OF_FILE, "EOF" });
 
-			CPP_PARSER_FREE_FILE(rawFileContents);
+			FileIO::DefaultFreeFile(rawFileContents);
 			return tokens;
 		}
 
-		void DebugPrint(const CPP_PARSER_VECTOR(Token)& tokens, bool printLineAndCol, bool printWhitespace)
+		void DebugPrint(const std::vector<Token>& tokens, bool printLineAndCol, bool printWhitespace)
 		{
-			CPP_PARSER_LOG_INFO("Tokens for file: '%s'", CPP_PARSER_GET_PATH_CSTR(m_Filepath));
+			Logger::Info("Tokens for file: '%s'", m_Filepath);
 
-			for (auto token = CPP_PARSER_VECTOR_BEGIN(tokens); token != CPP_PARSER_VECTOR_END(tokens); token++)
+			for (auto token = tokens.begin(); token != tokens.end(); token++)
 			{
 				if ((token->m_Type == TokenType::WHITESPACE || token->m_Type == TokenType::COMMENT))
 				{
@@ -421,23 +423,23 @@ namespace CppParser
 					else
 					{
 						if (token->m_Type == TokenType::WHITESPACE)
-							CPP_PARSER_LOG_INFO("Whitespace");
+							Logger::Info("Whitespace");
 						else if (token->m_Type == TokenType::COMMENT)
-							CPP_PARSER_LOG_INFO("Comment");
+							Logger::Info("Comment");
 						continue;
 					}
 				}
 				if (!printLineAndCol)
 				{
 					auto iter = tokenTypeToString.find(token->m_Type);
-					CPP_PARSER_LOG_ASSERT(iter != tokenTypeToString.end(), "Invalid token while debug printing.");
-					CPP_PARSER_LOG_INFO("Token<%s>: %s", iter->second, token->m_Lexeme);
+					Logger::Assert(iter != tokenTypeToString.end(), "Invalid token while debug printing.");
+					Logger::Info("Token<%s>: %s", iter->second, token->m_Lexeme);
 				}
 				else
 				{
 					auto iter = tokenTypeToString.find(token->m_Type);
-					CPP_PARSER_LOG_ASSERT(iter != tokenTypeToString.end(), "Invalid token while debug printing.");
-					CPP_PARSER_LOG_INFO("Line: %d:%d Token<%s>: %s", token->m_Line, token->m_Column, iter->second, token->m_Lexeme);
+					Logger::Assert(iter != tokenTypeToString.end(), "Invalid token while debug printing.");
+					Logger::Info("Line: %d:%d Token<%s>: %s", token->m_Line, token->m_Column, iter->second, token->m_Lexeme);
 				}
 			}
 		}
@@ -881,7 +883,7 @@ namespace CppParser
 
 				if (Peek() == '.')
 				{
-					CPP_PARSER_LOG_ERROR("Unexpected number literal at %d col:%d", m_Line, m_Column);
+					Logger::Error("Unexpected number literal at %d col:%d", m_Line, m_Column);
 					return GenerateErrorToken();
 				}
 			}
@@ -960,7 +962,7 @@ namespace CppParser
 			{
 				if (Peek() == '\n')
 				{
-					CPP_PARSER_LOG_WARNING("Invalid character literal encountered while parsing at line: %d:%d", m_Line, m_Column);
+					Logger::Warning("Invalid character literal encountered while parsing at line: %d:%d", m_Line, m_Column);
 					m_Line++;
 					m_Column = -1;
 					break;
@@ -981,7 +983,7 @@ namespace CppParser
 			if (AtEnd())
 			{
 				// TODO: This might not need to be here
-				CPP_PARSER_LOG_WARNING("Unexpected character literal at line %d:%d", m_Line, m_Column);
+				Logger::Warning("Unexpected character literal at line %d:%d", m_Line, m_Column);
 				return GenerateErrorToken();
 			}
 
@@ -1039,7 +1041,7 @@ namespace CppParser
 
 			if (AtEnd())
 			{
-				CPP_PARSER_LOG_ERROR("Unexpected string literal at %d col:%d", m_Line, m_Column);
+				Logger::Error("Unexpected string literal at %d col:%d", m_Line, m_Column);
 				return GenerateErrorToken();
 			}
 

@@ -7,7 +7,7 @@ namespace CppParser
 {
 	namespace Parser
 	{
-		AstNode* Parse(CPP_PARSER_VECTOR(Token)& tokens);
+		AstNode* Parse(std::vector<Token>& tokens);
 		void WalkTree(AstNode* tree, void(*callbackFn)(AstNode* node), AstNodeType notificationType = AstNodeType::All);
 		void FreeTree(AstNode* tree);
 	}

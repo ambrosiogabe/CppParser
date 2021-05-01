@@ -1,4 +1,5 @@
 #include "cppParser/Types.h"
+#include "cppParser/Logger.h"
 
 #include <cstring>
 
@@ -8,15 +9,24 @@ namespace CppParser
 	{
 		char* CreateString(const char* strToCopy)
 		{
-			int size = strlen(strToCopy);
-			char* newStr = (char*)AllocMem(size + 1);
-			strcpy(newStr, strToCopy);
+			size_t size = strlen(strToCopy);
+			size_t sizeWithNullByte = size + (unsigned long long)1;
+			char* newStr = (char*)AllocMem(sizeWithNullByte);
+
+			if (newStr)
+			{
+				strcpy_s(newStr, sizeWithNullByte, strToCopy);
+			}
+			else
+			{
+				Logger::Error("Failed to allocate memory for string.");
+			}
 			return newStr;
 		}
 
 		int StringLength(const char* str)
 		{
-			return strlen(str);
+			return (int)strlen(str);
 		}
 
 		bool Compare(const char* str1, const char* str2)

@@ -2,7 +2,7 @@ project "CppParser"
     kind "ConsoleApp"
     language "C++"
     cppdialect "C++17"
-    staticruntime "off"
+    staticruntime "on"
     
 	targetdir ("bin/" .. outputdir .. "/%{prj.name}")
     objdir ("bin-int/" .. outputdir .. "/%{prj.name}")
@@ -32,9 +32,3 @@ project "CppParser"
         postbuildcommands {
             "copy .\\test\\testParser.cpp .\\bin\\" .. outputdir .. "\\%{prj.name}\\testParser.cpp"
         }
-        
-    filter { "system:windows", "configurations:Debug" }
-        buildoptions "/MTd"        
-
-    filter { "system:windows", "configurations:Release" }
-        buildoptions "/MT"

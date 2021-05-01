@@ -1,7 +1,8 @@
 #include "cppParser/FileIO.h"
 #include "cppParser/Types.h"
+#include "cppParser/Logger.h"
 
-#include <fstream>
+#include <stdio.h>
 
 namespace CppParser
 {
@@ -17,21 +18,22 @@ namespace CppParser
 				int fileSize = ftell(filePointer);
 				rewind(filePointer);
 
-				char* data = (char*)AllocMem(sizeof(char) * (fileSize + 1));
+				// Cast 1 to a bigger int so that we don't get warnings
+				char* data = (char*)AllocMem(sizeof(char) * (fileSize + (unsigned long long)1));
 				if (!data)
 				{
 					fclose(filePointer);
-					CPP_PARSER_LOG_WARNING("Memory allocation failed.");
+					Logger::Error("Memory allocation failed.");
 					return nullptr;
 				}
 
-				int elementsRead = fread(data, fileSize, 1, filePointer);
+				size_t elementsRead = fread(data, fileSize, 1, filePointer);
 				if (elementsRead != 1)
 				{
 					fclose(filePointer);
 					FreeMem(data);
 					data = nullptr;
-					CPP_PARSER_LOG_WARNING("Failed to read file properly.");
+					Logger::Error("Failed to read file properly.");
 					return nullptr;
 				}
 
