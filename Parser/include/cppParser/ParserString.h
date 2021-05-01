@@ -1,5 +1,7 @@
 #pragma once
 
+// TODO: Make strings always const char*, and everytime you make a new one just
+// TODO: make a copy of it...
 namespace CppParser
 {
 	namespace ParserString

@@ -2,6 +2,11 @@
 #include <string>
 #include <stdio.h>
 
+#define COMPLEX(x) do \
+{ \
+	printf("Something"); \
+} while (false)
+
 namespace Cocoa
 {
 	struct SomeStructure

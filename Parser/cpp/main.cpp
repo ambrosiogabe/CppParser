@@ -18,7 +18,7 @@ int main()
 	using namespace CppParser;
 
 	std::vector<Token> tokens = ScriptScanner::ScanTokens("testParser.cpp");
-	//ScriptScanner::DebugPrint(tokens);
+	ScriptScanner::DebugPrint(tokens);
 	AstNode* parseTree = Parser::Parse(tokens);
 	Parser::WalkTree(parseTree, CppParser::PrintClasses, AstNodeType::ClassVirtualHead);
 	Parser::FreeTree(parseTree);

@@ -20,7 +20,6 @@ namespace CppParser
 
 		// Forward Declarations
 		static Token ScanToken();
-		static Token Macro();
 		static Token PropertyIdentifier();
 		static Token Number(char firstDigit);
 		static Token NumberDecimal(char firstDigit);
@@ -38,6 +37,7 @@ namespace CppParser
 		static inline char PeekNextNext();
 		static inline bool Match(char expected);
 		static inline void ConsumeTrailingUnsignedLong();
+		static inline char PeekPrevious(int amount) { return m_Cursor > amount && m_FileContentsSize > amount ? m_FileContents[m_Cursor - amount] : '\0'; }
 
 		static inline bool IsDigit(char c, bool acceptApostrophe = false) { return c >= '0' && c <= '9' || (acceptApostrophe && c == '\''); }
 		static inline bool IsHexDigit(char c, bool acceptApostrophe) { return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F') || (acceptApostrophe && c == '\''); }
@@ -193,20 +193,20 @@ namespace CppParser
 			{ "while",         TokenType::KW_WHILE },
 
 			// Macros
-			{ "#include",    TokenType::MACRO_INCLUDE },
-			{ "#ifdef",      TokenType::MACRO_IFDEF },
-			{ "#ifndef",     TokenType::MACRO_IFNDEF },
-			{ "#define",     TokenType::MACRO_DEFINE },
-			{ "#undefine",   TokenType::MACRO_UNDEF },
-			{ "#if",         TokenType::MACRO_IF },
-			{ "#elif",       TokenType::MACRO_ELIF },
-			{ "#endif",      TokenType::MACRO_ENDIF },
-			{ "#else",       TokenType::MACRO_ELSE },
-			{ "#error",      TokenType::MACRO_ERROR },
-			{ "#line",       TokenType::MACRO_LINE },
-			{ "#pragma",     TokenType::MACRO_PRAGMA },
-			{ "#region",     TokenType::MACRO_REGION },
-			{ "#using",      TokenType::MACRO_USING }
+			//{ "#include",    TokenType::MACRO_INCLUDE },
+			//{ "#ifdef",      TokenType::MACRO_IFDEF },
+			//{ "#ifndef",     TokenType::MACRO_IFNDEF },
+			//{ "#define",     TokenType::MACRO_DEFINE },
+			//{ "#undefine",   TokenType::MACRO_UNDEF },
+			//{ "#if",         TokenType::MACRO_IF },
+			//{ "#elif",       TokenType::MACRO_ELIF },
+			//{ "#endif",      TokenType::MACRO_ENDIF },
+			//{ "#else",       TokenType::MACRO_ELSE },
+			//{ "#error",      TokenType::MACRO_ERROR },
+			//{ "#line",       TokenType::MACRO_LINE },
+			//{ "#pragma",     TokenType::MACRO_PRAGMA },
+			//{ "#region",     TokenType::MACRO_REGION },
+			//{ "#using",      TokenType::MACRO_USING }
 		};
 
 		static const std::unordered_map<TokenType, const char*> tokenTypeToString = {
@@ -342,24 +342,26 @@ namespace CppParser
 			{ TokenType::CHARACTER_LITERAL,"character_literal"},
 			{ TokenType::COMMENT,          "comment"},
 			{ TokenType::WHITESPACE,       "whitespace"},
+			{ TokenType::NEWLINE,          "newline" },
+			{ TokenType::HASHTAG,          "#" },
 			{ TokenType::END_OF_FILE,      "EOF"},
 			{ TokenType::ERROR_TYPE,       "ERROR_TYPE"},
 
 			// Macros
-			{ TokenType::MACRO_INCLUDE, "#include" },
-			{ TokenType::MACRO_IFDEF,   "#ifdef" },
-			{ TokenType::MACRO_IFNDEF,  "#ifndef" },
-			{ TokenType::MACRO_DEFINE,  "#define" },
-			{ TokenType::MACRO_UNDEF,   "#undefine" },
-			{ TokenType::MACRO_IF,      "#if" },
-			{ TokenType::MACRO_ELIF,    "#elif" },
-			{ TokenType::MACRO_ENDIF,   "#endif" },
-			{ TokenType::MACRO_ELSE,    "#else" },
-			{ TokenType::MACRO_ERROR,   "#error" },
-			{ TokenType::MACRO_LINE,    "#line" },
-			{ TokenType::MACRO_PRAGMA,  "#pragma" },
-			{ TokenType::MACRO_REGION,  "#region" },
-			{ TokenType::MACRO_USING,   "#using" }
+			//{ TokenType::MACRO_INCLUDE, "#include" },
+			//{ TokenType::MACRO_IFDEF,   "#ifdef" },
+			//{ TokenType::MACRO_IFNDEF,  "#ifndef" },
+			//{ TokenType::MACRO_DEFINE,  "#define" },
+			//{ TokenType::MACRO_UNDEF,   "#undefine" },
+			//{ TokenType::MACRO_IF,      "#if" },
+			//{ TokenType::MACRO_ELIF,    "#elif" },
+			//{ TokenType::MACRO_ENDIF,   "#endif" },
+			//{ TokenType::MACRO_ELSE,    "#else" },
+			//{ TokenType::MACRO_ERROR,   "#error" },
+			//{ TokenType::MACRO_LINE,    "#line" },
+			//{ TokenType::MACRO_PRAGMA,  "#pragma" },
+			//{ TokenType::MACRO_REGION,  "#region" },
+			//{ TokenType::MACRO_USING,   "#using" }
 		};
 
 		// Main declarations
@@ -460,6 +462,7 @@ namespace CppParser
 			case '?': return GenerateToken(TokenType::QUESTION, "?");
 			case '~': return GenerateToken(TokenType::TILDE, "~");
 			case ',': return GenerateToken(TokenType::COMMA, ",");
+			case '#': return GenerateToken(TokenType::HASHTAG, "#");
 			case '"': return String();
 			case '\'': return Character();
 			case ':':
@@ -606,23 +609,6 @@ namespace CppParser
 				}
 				return GenerateToken(TokenType::MINUS, "-");
 			}
-			case '#':
-			{
-				char prevToken = c;
-				while (!AtEnd() && !(Peek() == '\n' && prevToken != '\\'))
-				{
-					prevToken = c;
-					c = Advance();
-					if (c == '\n')
-					{
-						m_Column = 0;
-						m_Line++;
-					}
-				}
-
-				// All preprocessor tokens will be considered COMMENTS for now :)
-				return GenerateCommentToken();
-			}
 			case '/':
 			{
 				if (Match('/'))
@@ -746,14 +732,23 @@ namespace CppParser
 			}
 			case ' ':
 			case '\r':
-			case '\t':
 				// Ignore whitespace
+				m_Column++;
+				return GenerateWhitespaceToken();
+			case '\t':
+				m_Column += 4;
 				return GenerateWhitespaceToken();
 			case '\n':
 				// Record the new line, then continue
 				m_Column = 0;
 				m_Line++;
-				return GenerateWhitespaceToken();
+				if (PeekPrevious(2) == '\\' || (PeekPrevious(2) == '\r' && PeekPrevious(3) == '\\'))
+				{
+					m_Line++;
+					m_Column = 0;
+					return GenerateWhitespaceToken();
+				}
+				return GenerateToken(TokenType::NEWLINE, "\\n");
 			default:
 				if (IsDigit(c))
 				{
@@ -763,25 +758,7 @@ namespace CppParser
 				{
 					return PropertyIdentifier();
 				}
-				if (c == '#')
-				{
-					return Macro();
-				}
 				break;
-			}
-
-			return GenerateErrorToken();
-		}
-
-		Token Macro()
-		{
-			while (IsAlphaNumeric(Peek())) Advance();
-
-			std::string text = std::string(m_FileContents.substr(m_Start, m_Cursor - m_Start));
-			auto iter = keywords.find(text.c_str());
-			if (iter != keywords.end())
-			{
-				return Token{ m_Line, m_Column - (m_Cursor - m_Start), iter->second, ParserString::CreateString(text.c_str()) };
 			}
 
 			return GenerateErrorToken();

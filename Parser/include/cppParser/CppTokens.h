@@ -48,6 +48,8 @@ namespace CppParser
 		USYSTEM,
 
 		// Special
+		HASHTAG,
+		NEWLINE,
 		COMMENT,
 		WHITESPACE,
 		END_OF_FILE,
