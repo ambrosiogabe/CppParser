@@ -4,6 +4,9 @@
 #include "cppParser/ScriptScanner.h"
 #include "cppParser/Logger.h"
 
+#include <algorithm>
+#include <cstring>
+
 namespace CppParser
 {
 	namespace Parser
@@ -11,7 +14,7 @@ namespace CppParser
 		// Internal variables
 		static std::vector<Token> Tokens;
 		static int CurrentToken = 0;
-		
+
 		// TODO: You need to implement the preprocessing engine and create a class table otherwise you won't be able to tell if you have a class or
 		// TODO: a variable, which is important when it comes to parsing assignment operations and stuff...
 
@@ -55,7 +58,7 @@ namespace CppParser
 
 		// =============================================================================================
 		// Free Tree function (public)
-		// 
+		//
 		// This will free all memory allocated by the AST tree passed in
 		// =============================================================================================
 		void FreeTree(AstNode* tree)
@@ -3037,7 +3040,7 @@ namespace CppParser
 		static AstNode* ParseNoptrNewDeclarator();
 		static AstNode* ParseNewInitializer();
 
-		// Delete 
+		// Delete
 		static AstNode* ParseDeleteExpression();
 
 		// Noexcept
@@ -4282,7 +4285,7 @@ namespace CppParser
 			return ParseBracedInitList();
 		}
 
-		// Delete 
+		// Delete
 		static AstNode* ParseDeleteExpression()
 		{
 			if (Match(TokenType::COLON))
@@ -5409,7 +5412,7 @@ namespace CppParser
 		{
 			int backtrackPosition = CurrentToken;
 			// TODO: Is this right?
-			if (PeekIn({TokenType::KW_CLASS, TokenType::KW_UNION, TokenType::KW_STRUCT, TokenType::KW_ENUM}) && 
+			if (PeekIn({TokenType::KW_CLASS, TokenType::KW_UNION, TokenType::KW_STRUCT, TokenType::KW_ENUM}) &&
 				LookAheadBeforeSemicolon({ TokenType::LEFT_CURLY_BRACKET }))
 			{
 				AstNode* classSpecifier = ParseClassSpecifier();
@@ -5692,7 +5695,7 @@ namespace CppParser
 					Consume(TokenType::COLON);
 				}
 
-				// Optional 
+				// Optional
 				AstNode* nestedNameSpecifier = GenerateNoSuccessAstNode();
 				if (MatchBeforeSemicolon(TokenType::COLON, TokenType::COLON))
 				{
@@ -6440,7 +6443,7 @@ namespace CppParser
 				AstNode* attributeSpecifierSeq = ParseAttributeSpecifierSequence();
 				// Optional
 				AstNode* cvQualifierSeq = ParseCvQualifierSequence();
-				// Optional 
+				// Optional
 				AstNode* refQualifier = ParseRefQualifier();
 				// Optional
 				AstNode* exceptionSpec = ParseExceptionSpecification();
@@ -6823,7 +6826,7 @@ namespace CppParser
 				FreeNode(declarator);
 				BacktrackTo(backtrackPosition2);
 
-				// Optional 
+				// Optional
 				AstNode* abstractDeclarator = ParseAbstractDeclarator();
 				if (Match(TokenType::EQUAL))
 				{

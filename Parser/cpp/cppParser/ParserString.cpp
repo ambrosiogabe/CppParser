@@ -15,7 +15,7 @@ namespace CppParser
 
 			if (newStr)
 			{
-				strcpy_s(newStr, sizeWithNullByte, strToCopy);
+				strcpy(newStr, strToCopy);
 			}
 			else
 			{
