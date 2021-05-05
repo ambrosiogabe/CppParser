@@ -12,20 +12,30 @@ namespace CppParser
 	namespace Parser
 	{
 		// Internal variables
-		static std::vector<Token> Tokens;
-		static int CurrentToken = 0;
-
-		// TODO: You need to implement the preprocessing engine and create a class table otherwise you won't be able to tell if you have a class or
-		// TODO: a variable, which is important when it comes to parsing assignment operations and stuff...
-
-		static AstNode* ParseTranslationUnit();
-
-		AstNode* Parse(std::vector<Token>& tokens)
+		struct PPSymbolTable
 		{
-			CurrentToken = 0;
-			Tokens = tokens;
 
-			AstNode* result = ParseTranslationUnit();
+		};
+
+		static PPSymbolTable PreprocessingSymbolTable;
+		static std::vector<std::filesystem::path> FilesSeen = {};
+		struct ParserData
+		{
+			std::vector<Token> Tokens;
+			int CurrentToken;
+		};
+
+		static AstNode* ParseTranslationUnit(const char* fileBeingParsed, std::vector<std::filesystem::path>& includeDirs, ParserData& data);
+
+		AstNode* Parse(const char* fileBeingParsed, std::vector<std::filesystem::path>& includeDirs, std::vector<Token>& tokens)
+		{
+			FilesSeen.clear();
+			ParserData data = {
+				tokens,
+				0
+			};
+
+			AstNode* result = ParseTranslationUnit(fileBeingParsed, includeDirs, data);
 			return result;
 		}
 
@@ -898,23 +908,23 @@ namespace CppParser
 		//
 		// These are a collection of functions used to give useful information during parse
 		// ===============================================================================================
-		static bool AtEnd()
+		static bool AtEnd(ParserData& data)
 		{
-			return CurrentToken == Tokens.size();
+			return data.CurrentToken == data.Tokens.size();
 		}
 
-		static void ErrorAtToken()
+		static void ErrorAtToken(ParserData& data)
 		{
-			Token& currentToken = AtEnd() ? Tokens[Tokens.size() - 1] : Tokens[CurrentToken];
+			Token& currentToken = AtEnd(data) ? data.Tokens[data.Tokens.size() - 1] : data.Tokens[data.CurrentToken];
 			Logger::Error("Unexpected token '%s' at line %d:%d", ScriptScanner::TokenName(currentToken.m_Type), currentToken.m_Line, currentToken.m_Column);
 		}
 
-		static void Consume(TokenType type)
+		static void Consume(ParserData& data, TokenType type)
 		{
-			Token& currentToken = Tokens[CurrentToken];
+			Token& currentToken = data.Tokens[data.CurrentToken];
 			if (currentToken.m_Type == type)
 			{
-				CurrentToken++;
+				data.CurrentToken++;
 				return;
 			}
 
@@ -922,42 +932,44 @@ namespace CppParser
 				ScriptScanner::TokenName(currentToken.m_Type), currentToken.m_Line, currentToken.m_Column);
 		}
 
-		static void BacktrackTo(int position)
+		static void BacktrackTo(ParserData& data, int position)
 		{
-			Logger::Assert(position >= 0 && position < Tokens.size(), "Invalid backtrack location.");
-			CurrentToken = position;
+			Logger::Assert(position >= 0 && position < data.Tokens.size(), "Invalid backtrack location.");
+			data.CurrentToken = position;
 		}
 
-		static bool Match(TokenType type)
+		static bool Match(ParserData& data, TokenType type)
 		{
-			Token& currentToken = AtEnd() ? Tokens[Tokens.size() - 1] : Tokens[CurrentToken];
+			Token& currentToken = AtEnd(data) ? data.Tokens[data.Tokens.size() - 1] : data.Tokens[data.CurrentToken];
 			if (currentToken.m_Type == type)
 			{
-				CurrentToken++;
+				data.CurrentToken++;
 				return true;
 			}
 
 			return false;
 		}
 
-		static Token ConsumeCurrent(TokenType type)
+		static Token ConsumeCurrent(ParserData& data, TokenType type)
 		{
-			Token& currentToken = AtEnd() ? Tokens[Tokens.size() - 1] : Tokens[CurrentToken];
+			Token& currentToken = AtEnd(data) ? data.Tokens[data.Tokens.size() - 1] : data.Tokens[data.CurrentToken];
 			if (currentToken.m_Type == type)
 			{
-				CurrentToken++;
+				data.CurrentToken++;
 				return currentToken;
 			}
 
-			Logger::Error("Unexpected token. Expected '%s' instead got '%s'",
+			Logger::Error("Unexpected token. Expected '%s' instead got '%s' at line %d:%d",
 				ScriptScanner::TokenName(type),
-				ScriptScanner::TokenName(currentToken.m_Type));
+				ScriptScanner::TokenName(currentToken.m_Type),
+				currentToken.m_Line,
+				currentToken.m_Column);
 			return currentToken;
 		}
 
-		static Token GetCurrentToken()
+		static Token GetCurrentToken(ParserData& data)
 		{
-			return AtEnd() ? Tokens[Tokens.size() - 1] : Tokens[CurrentToken];
+			return AtEnd(data) ? data.Tokens[data.Tokens.size() - 1] : data.Tokens[data.CurrentToken];
 		}
 
 		static bool IsAssignmentOperator(TokenType type)
@@ -967,29 +979,29 @@ namespace CppParser
 				type == TokenType::AND_EQUAL || type == TokenType::CARET_EQUAL || type == TokenType::PIPE_EQUAL;
 		}
 
-		static TokenType Peek()
+		static TokenType Peek(ParserData& data)
 		{
-			return AtEnd() ? Tokens[Tokens.size() - 1].m_Type : Tokens[CurrentToken].m_Type;
+			return AtEnd(data) ? data.Tokens[data.Tokens.size() - 1].m_Type : data.Tokens[data.CurrentToken].m_Type;
 		}
 
-		static bool PeekIn(std::initializer_list<TokenType> tokenTypes)
+		static bool PeekIn(ParserData& data, std::initializer_list<TokenType> tokenTypes)
 		{
-			if (std::find(tokenTypes.begin(), tokenTypes.end(), Peek()) != tokenTypes.end())
+			if (std::find(tokenTypes.begin(), tokenTypes.end(), Peek(data)) != tokenTypes.end())
 			{
 				return true;
 			}
 			return false;
 		}
 
-		static bool LookAheadBeforeSemicolon(std::initializer_list<TokenType> tokenTypes)
+		static bool LookAheadBeforeSemicolon(ParserData& data, std::initializer_list<TokenType> tokenTypes)
 		{
 			// This function looks for a token that matches any of the types in the initializer list
 			// before the first semicolon or eof token. If it finds it, it returns true, otherwise false
-			int token = CurrentToken;
+			int token = data.CurrentToken;
 			size_t tokenTypeSize = tokenTypes.size();
-			while (!AtEnd())
+			while (!AtEnd(data))
 			{
-				Token& iter = Tokens[token];
+				Token& iter = data.Tokens[token];
 				if (iter.m_Type == TokenType::SEMICOLON)
 				{
 					return false;
@@ -1000,7 +1012,7 @@ namespace CppParser
 					return true;
 				}
 				token++;
-				if (token >= Tokens.size())
+				if (token >= data.Tokens.size())
 				{
 					return false;
 				}
@@ -1009,25 +1021,25 @@ namespace CppParser
 			return false;
 		}
 
-		static bool MatchBeforeSemicolon(TokenType type1, TokenType nextType)
+		static bool MatchBeforeSemicolon(ParserData& data, TokenType type1, TokenType nextType)
 		{
 			// This function looks for a token that matches any of the types in the initializer list
 			// before the first semicolon or eof token. If it finds it, it returns true, otherwise false
-			int token = CurrentToken;
-			while (!AtEnd())
+			int token = data.CurrentToken;
+			while (!AtEnd(data))
 			{
-				Token& iter = Tokens[token];
+				Token& iter = data.Tokens[token];
 				if (iter.m_Type == TokenType::SEMICOLON)
 				{
 					return false;
 				}
 
-				if (iter.m_Type == type1 && token < Tokens.size() && Tokens[token + 1].m_Type == nextType)
+				if (iter.m_Type == type1 && token < data.Tokens.size() && data.Tokens[token + 1].m_Type == nextType)
 				{
 					return true;
 				}
 				token++;
-				if (token >= Tokens.size())
+				if (token >= data.Tokens.size())
 				{
 					return false;
 				}
@@ -2968,6 +2980,12 @@ namespace CppParser
 			return result;
 		}
 
+		static PreprocessingAstNode* GenerateEmptyMacroNode()
+		{
+			PreprocessingAstNode* result = GeneratePreprocessingAstNode(PreprocessingAstNodeType::EmptyMacro);
+			return result;
+		}
+
 		static PreprocessingAstNode* GenerateStringLiteralNode(Token stringLiteral)
 		{
 			PreprocessingAstNode* result = GeneratePreprocessingAstNode(PreprocessingAstNodeType::StringLiteral);
@@ -3007,302 +3025,305 @@ namespace CppParser
 		// Parser Forward Declarations (internal)
 		// ===============================================================================================
 		// Translation Unit
-		static AstNode* ParseTranslationUnit();
+		static AstNode* ParseTranslationUnit(const char* fileBeingParsed, std::vector<std::filesystem::path>& includeDirs, ParserData& data);
 
 		// Expressions
-		static AstNode* ParsePrimaryExpression();
-		static AstNode* ParseIdExpression();
-		static AstNode* ParseUnqualifiedId();
-		static AstNode* ParseQualifiedId();
-		static AstNode* ParseNestedNameSpecifier();
+		static AstNode* ParsePrimaryExpression(ParserData& data);
+		static AstNode* ParseIdExpression(ParserData& data);
+		static AstNode* ParseUnqualifiedId(ParserData& data);
+		static AstNode* ParseQualifiedId(ParserData& data);
+		static AstNode* ParseNestedNameSpecifier(ParserData& data);
 
 		// Lambdas
-		static AstNode* ParseLambdaExpression();
-		static AstNode* ParseLambdaIntroducer();
-		static AstNode* ParseLambdaCapture();
-		static AstNode* ParseCaptureList();
-		static AstNode* ParseCapture();
-		static AstNode* ParseLambdaDeclarator();
+		static AstNode* ParseLambdaExpression(ParserData& data);
+		static AstNode* ParseLambdaIntroducer(ParserData& data);
+		static AstNode* ParseLambdaCapture(ParserData& data);
+		static AstNode* ParseCaptureList(ParserData& data);
+		static AstNode* ParseCapture(ParserData& data);
+		static AstNode* ParseLambdaDeclarator(ParserData& data);
 
 		// Postfix Expressions
-		static AstNode* ParsePostfixExpression();
-		static AstNode* ParseExpressionList();
-		static AstNode* ParsePseudoDestructorName();
+		static AstNode* ParsePostfixExpression(ParserData& data);
+		static AstNode* ParseExpressionList(ParserData& data);
+		static AstNode* ParsePseudoDestructorName(ParserData& data);
 
 		// Unary Expressions
-		static AstNode* ParseUnaryExpression();
+		static AstNode* ParseUnaryExpression(ParserData& data);
 
 		// New Expressions
-		static AstNode* ParseNewExpression();
-		static AstNode* ParseNewPlacement();
-		static AstNode* ParseNewTypeId();
-		static AstNode* ParseNewDeclarator();
-		static AstNode* ParseNoptrNewDeclarator();
-		static AstNode* ParseNewInitializer();
+		static AstNode* ParseNewExpression(ParserData& data);
+		static AstNode* ParseNewPlacement(ParserData& data);
+		static AstNode* ParseNewTypeId(ParserData& data);
+		static AstNode* ParseNewDeclarator(ParserData& data);
+		static AstNode* ParseNoptrNewDeclarator(ParserData& data);
+		static AstNode* ParseNewInitializer(ParserData& data);
 
 		// Delete
-		static AstNode* ParseDeleteExpression();
+		static AstNode* ParseDeleteExpression(ParserData& data);
 
 		// Noexcept
-		static AstNode* ParseNoexceptExpression();
+		static AstNode* ParseNoexceptExpression(ParserData& data);
 
 		// Cast
-		static AstNode* ParseCastExpression();
+		static AstNode* ParseCastExpression(ParserData& data);
 
 		// Pointer to member
-		static AstNode* ParsePmExpression();
+		static AstNode* ParsePmExpression(ParserData& data);
 
 		// Primary operations
-		static AstNode* ParseMultiplicativeExpression();
-		static AstNode* ParseAdditiveExpression();
-		static AstNode* ParseShiftExpression();
+		static AstNode* ParseMultiplicativeExpression(ParserData& data);
+		static AstNode* ParseAdditiveExpression(ParserData& data);
+		static AstNode* ParseShiftExpression(ParserData& data);
 
 		// Comparision operations
-		static AstNode* ParseRelationalExpression();
-		static AstNode* ParseEqualityExpression();
-		static AstNode* ParseAndExpression();
+		static AstNode* ParseRelationalExpression(ParserData& data);
+		static AstNode* ParseEqualityExpression(ParserData& data);
+		static AstNode* ParseAndExpression(ParserData& data);
 
 		// Logical operations
-		static AstNode* ParseExclusiveOrExpression();
-		static AstNode* ParseInclusiveOrExpression();
-		static AstNode* ParseLogicalAndExpression();
-		static AstNode* ParseLogicalOrExpression();
+		static AstNode* ParseExclusiveOrExpression(ParserData& data);
+		static AstNode* ParseInclusiveOrExpression(ParserData& data);
+		static AstNode* ParseLogicalAndExpression(ParserData& data);
+		static AstNode* ParseLogicalOrExpression(ParserData& data);
 
 		// Misc expressions
-		static AstNode* ParseConditionalExpression();
-		static AstNode* ParseAssignmentExpression();
-		static AstNode* ParseAlignmentExpression();
+		static AstNode* ParseConditionalExpression(ParserData& data);
+		static AstNode* ParseAssignmentExpression(ParserData& data);
+		static AstNode* ParseAlignmentExpression(ParserData& data);
 
-		static AstNode* ParseExpression();
-		static AstNode* ParseConstantExpression();
+		static AstNode* ParseExpression(ParserData& data);
+		static AstNode* ParseConstantExpression(ParserData& data);
 
 		// Statements
-		static AstNode* ParseStatement();
-		static AstNode* ParseLabeledStatement();
-		static AstNode* ParseExpressionStatement();
-		static AstNode* ParseCompoundStatement();
-		static AstNode* ParseStatementSequence();
+		static AstNode* ParseStatement(ParserData& data);
+		static AstNode* ParseLabeledStatement(ParserData& data);
+		static AstNode* ParseExpressionStatement(ParserData& data);
+		static AstNode* ParseCompoundStatement(ParserData& data);
+		static AstNode* ParseStatementSequence(ParserData& data);
 
 		// Selection statements
-		static AstNode* ParseSelectionStatement();
-		static AstNode* ParseCondition();
+		static AstNode* ParseSelectionStatement(ParserData& data);
+		static AstNode* ParseCondition(ParserData& data);
 
 		// Iteration statements
-		static AstNode* ParseIterationStatement();
-		static AstNode* ParseForInitStatement();
-		static AstNode* ParseForRangeDeclaration();
-		static AstNode* ParseForRangeInitializer();
+		static AstNode* ParseIterationStatement(ParserData& data);
+		static AstNode* ParseForInitStatement(ParserData& data);
+		static AstNode* ParseForRangeDeclaration(ParserData& data);
+		static AstNode* ParseForRangeInitializer(ParserData& data);
 
 		// Jump statements
-		static AstNode* ParseJumpStatement();
+		static AstNode* ParseJumpStatement(ParserData& data);
 
 		// Declarations
-		static AstNode* ParseDeclarationStatement();
-		static AstNode* ParseDeclarationSequence();
-		static AstNode* ParseUSystemDeclaration();
-		static AstNode* ParseDeclaration();
-		static AstNode* ParseBlockDeclaration();
-		static AstNode* ParseAliasDeclaration();
-		static AstNode* ParseSimpleDeclaration();
-		static AstNode* ParseStaticAssertDeclaration();
-		static AstNode* ParseEmptyDeclaration();
-		static AstNode* ParseAttributeDeclaration();
+		static AstNode* ParseDeclarationStatement(ParserData& data);
+		static AstNode* ParseDeclarationSequence(ParserData& data);
+		static AstNode* ParseUSystemDeclaration(ParserData& data);
+		static AstNode* ParseDeclaration(ParserData& data);
+		static AstNode* ParseBlockDeclaration(ParserData& data);
+		static AstNode* ParseAliasDeclaration(ParserData& data);
+		static AstNode* ParseSimpleDeclaration(ParserData& data);
+		static AstNode* ParseStaticAssertDeclaration(ParserData& data);
+		static AstNode* ParseEmptyDeclaration(ParserData& data);
+		static AstNode* ParseAttributeDeclaration(ParserData& data);
 
-		static AstNode* ParseDeclarationSpecifier();
-		static AstNode* ParseDeclarationSpecifierSequence();
-		static AstNode* ParseStorageClassSpecifier();
-		static AstNode* ParseFunctionSpecifier();
+		static AstNode* ParseDeclarationSpecifier(ParserData& data);
+		static AstNode* ParseDeclarationSpecifierSequence(ParserData& data);
+		static AstNode* ParseStorageClassSpecifier(ParserData& data);
+		static AstNode* ParseFunctionSpecifier(ParserData& data);
 
 		// Types/typedefs
-		static AstNode* ParseTypedefName();
-		static AstNode* ParseTypeSpecifier();
-		static AstNode* ParseTrailingTypeSpecifier();
-		static AstNode* ParseTypeSpecifierSequence();
-		static AstNode* ParseTrailingTypeSpecifierSequence();
+		static AstNode* ParseTypedefName(ParserData& data);
+		static AstNode* ParseTypeSpecifier(ParserData& data);
+		static AstNode* ParseTrailingTypeSpecifier(ParserData& data);
+		static AstNode* ParseTypeSpecifierSequence(ParserData& data);
+		static AstNode* ParseTrailingTypeSpecifierSequence(ParserData& data);
 
-		static AstNode* ParseSimpleTypeSpecifier();
-		static AstNode* ParseTypeName();
-		static AstNode* ParseDecltypeSpecifier();
-		static AstNode* ParseElaboratedTypeSpecifier();
+		static AstNode* ParseSimpleTypeSpecifier(ParserData& data);
+		static AstNode* ParseTypeName(ParserData& data);
+		static AstNode* ParseDecltypeSpecifier(ParserData& data);
+		static AstNode* ParseElaboratedTypeSpecifier(ParserData& data);
 
 		// Enums
-		static AstNode* ParseEnumName();
-		static AstNode* ParseEnumSpecifier();
-		static AstNode* ParseEnumHead();
-		static AstNode* ParseOpaqueEnumDeclaration();
-		static AstNode* ParseEnumKey();
-		static AstNode* ParseEnumBase();
-		static AstNode* ParseEnumeratorList();
-		static AstNode* ParseEnumeratorDefinition();
+		static AstNode* ParseEnumName(ParserData& data);
+		static AstNode* ParseEnumSpecifier(ParserData& data);
+		static AstNode* ParseEnumHead(ParserData& data);
+		static AstNode* ParseOpaqueEnumDeclaration(ParserData& data);
+		static AstNode* ParseEnumKey(ParserData& data);
+		static AstNode* ParseEnumBase(ParserData& data);
+		static AstNode* ParseEnumeratorList(ParserData& data);
+		static AstNode* ParseEnumeratorDefinition(ParserData& data);
 
 		// Namespaces
-		static AstNode* ParseNamespaceName();
-		static AstNode* ParseNamespaceDefinition();
-		static AstNode* ParseNamedNamespaceDefinition();
-		static AstNode* ParseUnnamedNamespaceDefinition();
-		static AstNode* ParseNamespaceBody();
+		static AstNode* ParseNamespaceName(ParserData& data);
+		static AstNode* ParseNamespaceDefinition(ParserData& data);
+		static AstNode* ParseNamedNamespaceDefinition(ParserData& data);
+		static AstNode* ParseUnnamedNamespaceDefinition(ParserData& data);
+		static AstNode* ParseNamespaceBody(ParserData& data);
 
 		// Namespace alias
-		static AstNode* ParseNamespaceAliasDefinition();
-		static AstNode* ParseQualifiedNamespaceSpecifier();
+		static AstNode* ParseNamespaceAliasDefinition(ParserData& data);
+		static AstNode* ParseQualifiedNamespaceSpecifier(ParserData& data);
 
 		// Using
-		static AstNode* ParseUsingDeclaration();
-		static AstNode* ParseUsingDirective();
-		static AstNode* ParseAsmDefinition();
-		static AstNode* ParseLinkageSpecification();
+		static AstNode* ParseUsingDeclaration(ParserData& data);
+		static AstNode* ParseUsingDirective(ParserData& data);
+		static AstNode* ParseAsmDefinition(ParserData& data);
+		static AstNode* ParseLinkageSpecification(ParserData& data);
 
 		// Declaration Grammar
-		static AstNode* ParseAttributeSpecifierSequence();
-		static AstNode* ParseAttributeSpecifier();
-		static AstNode* ParseAlignmentSpecifier();
-		static AstNode* ParseAttributeList();
-		static AstNode* ParseAttribute();
-		static AstNode* ParseAttributeToken();
-		static AstNode* ParseAttributeArgumentClause();
-		static AstNode* ParseBalancedTokenSequence();
-		static AstNode* ParseBalancedToken();
+		static AstNode* ParseAttributeSpecifierSequence(ParserData& data);
+		static AstNode* ParseAttributeSpecifier(ParserData& data);
+		static AstNode* ParseAlignmentSpecifier(ParserData& data);
+		static AstNode* ParseAttributeList(ParserData& data);
+		static AstNode* ParseAttribute(ParserData& data);
+		static AstNode* ParseAttributeToken(ParserData& data);
+		static AstNode* ParseAttributeArgumentClause(ParserData& data);
+		static AstNode* ParseBalancedTokenSequence(ParserData& data);
+		static AstNode* ParseBalancedToken(ParserData& data);
 
 		// Declarations
-		static AstNode* ParseInitDeclaratorList();
-		static AstNode* ParseInitDeclarator();
-		static AstNode* ParseDeclarator();
-		static AstNode* ParsePtrDeclarator();
-		static AstNode* ParseNoPtrDeclarator();
-		static AstNode* ParseParametersAndQualifiers();
-		static AstNode* ParseTrailingReturnType();
-		static AstNode* ParsePtrOperator();
-		static AstNode* ParseCvQualifierSequence();
-		static AstNode* ParseCvQualifier();
-		static AstNode* ParseRefQualifier();
-		static AstNode* ParseDeclaratorId();
+		static AstNode* ParseInitDeclaratorList(ParserData& data);
+		static AstNode* ParseInitDeclarator(ParserData& data);
+		static AstNode* ParseDeclarator(ParserData& data);
+		static AstNode* ParsePtrDeclarator(ParserData& data);
+		static AstNode* ParseNoPtrDeclarator(ParserData& data);
+		static AstNode* ParseParametersAndQualifiers(ParserData& data);
+		static AstNode* ParseTrailingReturnType(ParserData& data);
+		static AstNode* ParsePtrOperator(ParserData& data);
+		static AstNode* ParseCvQualifierSequence(ParserData& data);
+		static AstNode* ParseCvQualifier(ParserData& data);
+		static AstNode* ParseRefQualifier(ParserData& data);
+		static AstNode* ParseDeclaratorId(ParserData& data);
 
 		// dcl.name
-		static AstNode* ParseTypeId();
-		static AstNode* ParseAbstractDeclarator();
-		static AstNode* ParsePtrAbstractDeclarator();
-		static AstNode* ParseNoptrAbstractDeclarator();
+		static AstNode* ParseTypeId(ParserData& data);
+		static AstNode* ParseAbstractDeclarator(ParserData& data);
+		static AstNode* ParsePtrAbstractDeclarator(ParserData& data);
+		static AstNode* ParseNoptrAbstractDeclarator(ParserData& data);
 
 		// dcl.fct
-		static AstNode* ParseParameterDeclarationClause();
-		static AstNode* ParseParameterDeclarationList();
-		static AstNode* ParseParameterDeclaration();
+		static AstNode* ParseParameterDeclarationClause(ParserData& data);
+		static AstNode* ParseParameterDeclarationList(ParserData& data);
+		static AstNode* ParseParameterDeclaration(ParserData& data);
 
 		// Functions
-		static AstNode* ParseFunctionDefinition();
-		static AstNode* ParseFunctionBody();
+		static AstNode* ParseFunctionDefinition(ParserData& data);
+		static AstNode* ParseFunctionBody(ParserData& data);
 
 		// Init
-		static AstNode* ParseInitializer();
-		static AstNode* ParseBraceOrEqualInitializer();
-		static AstNode* ParseInitializerClause();
-		static AstNode* ParseInitializerList();
-		static AstNode* ParseBracedInitList();
+		static AstNode* ParseInitializer(ParserData& data);
+		static AstNode* ParseBraceOrEqualInitializer(ParserData& data);
+		static AstNode* ParseInitializerClause(ParserData& data);
+		static AstNode* ParseInitializerList(ParserData& data);
+		static AstNode* ParseBracedInitList(ParserData& data);
 
 		// Classes
-		static AstNode* ParseClassName();
-		static AstNode* ParseClassSpecifier();
-		static AstNode* ParseClassHead();
-		static AstNode* ParseClassHeadName();
-		static AstNode* ParseClassVirtSpecifierSequence();
-		static AstNode* ParseClassVirtSpecifier();
-		static AstNode* ParseClassKey();
+		static AstNode* ParseClassName(ParserData& data);
+		static AstNode* ParseClassSpecifier(ParserData& data);
+		static AstNode* ParseClassHead(ParserData& data);
+		static AstNode* ParseClassHeadName(ParserData& data);
+		static AstNode* ParseClassVirtSpecifierSequence(ParserData& data);
+		static AstNode* ParseClassVirtSpecifier(ParserData& data);
+		static AstNode* ParseClassKey(ParserData& data);
 
 		// Class Members
-		static AstNode* ParseMemberSpecification();
-		static AstNode* ParseMemberDeclaration();
-		static AstNode* ParseMemberDeclaratorList();
-		static AstNode* ParseMemberDeclarator();
-		static AstNode* ParseVirtSpecifierSequence();
-		static AstNode* ParseVirtSpecifier();
-		static AstNode* ParsePureSpecifier();
+		static AstNode* ParseMemberSpecification(ParserData& data);
+		static AstNode* ParseMemberDeclaration(ParserData& data);
+		static AstNode* ParseMemberDeclaratorList(ParserData& data);
+		static AstNode* ParseMemberDeclarator(ParserData& data);
+		static AstNode* ParseVirtSpecifierSequence(ParserData& data);
+		static AstNode* ParseVirtSpecifier(ParserData& data);
+		static AstNode* ParsePureSpecifier(ParserData& data);
 
 		// Derived classes
-		static AstNode* ParseBaseClause();
-		static AstNode* ParseBaseSpecifierList();
-		static AstNode* ParseBaseSpecifier();
-		static AstNode* ParseClassOrDecltype();
-		static AstNode* ParseBaseTypeSpecifier();
-		static AstNode* ParseAccessSpecifier();
+		static AstNode* ParseBaseClause(ParserData& data);
+		static AstNode* ParseBaseSpecifierList(ParserData& data);
+		static AstNode* ParseBaseSpecifier(ParserData& data);
+		static AstNode* ParseClassOrDecltype(ParserData& data);
+		static AstNode* ParseBaseTypeSpecifier(ParserData& data);
+		static AstNode* ParseAccessSpecifier(ParserData& data);
 
 		// Class conversion functions
-		static AstNode* ParseConversionFunctionId();
-		static AstNode* ParseConversionTypeId();
-		static AstNode* ParseConversionDeclarator();
+		static AstNode* ParseConversionFunctionId(ParserData& data);
+		static AstNode* ParseConversionTypeId(ParserData& data);
+		static AstNode* ParseConversionDeclarator(ParserData& data);
 
 		// Class initializers
-		static AstNode* ParseCtorInitializer();
-		static AstNode* ParseMemInitializerList();
-		static AstNode* ParseMemInitializer();
-		static AstNode* ParseMemInitializerId();
+		static AstNode* ParseCtorInitializer(ParserData& data);
+		static AstNode* ParseMemInitializerList(ParserData& data);
+		static AstNode* ParseMemInitializer(ParserData& data);
+		static AstNode* ParseMemInitializerId(ParserData& data);
 
 		// Operator overloading
-		static AstNode* ParseOperatorFunctionId();
-		static OverloadableOperatorType ParseOverloadableOperator();
+		static AstNode* ParseOperatorFunctionId(ParserData& data);
+		static OverloadableOperatorType ParseOverloadableOperator(ParserData& data);
 
 		// Literal overrides
-		static AstNode* ParseLiteralOperatorId();
+		static AstNode* ParseLiteralOperatorId(ParserData& data);
 
 		// Templates
-		static AstNode* ParseTemplateDeclaration();
-		static AstNode* ParseTemplateParameterList();
-		static AstNode* ParseTemplateParameter();
-		static AstNode* ParseTypeParameter();
-		static AstNode* ParseSimpleTemplateId();
-		static AstNode* ParseTemplateId();
-		static AstNode* ParseTemplateName();
-		static AstNode* ParseTemplateArgumentList();
-		static AstNode* ParseTemplateArgument();
+		static AstNode* ParseTemplateDeclaration(ParserData& data);
+		static AstNode* ParseTemplateParameterList(ParserData& data);
+		static AstNode* ParseTemplateParameter(ParserData& data);
+		static AstNode* ParseTypeParameter(ParserData& data);
+		static AstNode* ParseSimpleTemplateId(ParserData& data);
+		static AstNode* ParseTemplateId(ParserData& data);
+		static AstNode* ParseTemplateName(ParserData& data);
+		static AstNode* ParseTemplateArgumentList(ParserData& data);
+		static AstNode* ParseTemplateArgument(ParserData& data);
 
-		static AstNode* ParseTypenameSpecifier();
-		static AstNode* ParseExplicitInstantiation();
-		static AstNode* ParseExplicitSpecialization();
+		static AstNode* ParseTypenameSpecifier(ParserData& data);
+		static AstNode* ParseExplicitInstantiation(ParserData& data);
+		static AstNode* ParseExplicitSpecialization(ParserData& data);
 
 		// Exceptions
-		static AstNode* ParseTryBlock();
-		static AstNode* ParseFunctionTryBlock();
-		static AstNode* ParseHandlerSequence();
-		static AstNode* ParseHandler();
-		static AstNode* ParseExceptionDeclaration();
+		static AstNode* ParseTryBlock(ParserData& data);
+		static AstNode* ParseFunctionTryBlock(ParserData& data);
+		static AstNode* ParseHandlerSequence(ParserData& data);
+		static AstNode* ParseHandler(ParserData& data);
+		static AstNode* ParseExceptionDeclaration(ParserData& data);
 
-		static AstNode* ParseThrowExpression();
-		static AstNode* ParseExceptionSpecification();
-		static AstNode* ParseDynamicExceptionSpecification();
-		static AstNode* ParseTypeIdList();
-		static AstNode* ParseNoexceptSpecification();
+		static AstNode* ParseThrowExpression(ParserData& data);
+		static AstNode* ParseExceptionSpecification(ParserData& data);
+		static AstNode* ParseDynamicExceptionSpecification(ParserData& data);
+		static AstNode* ParseTypeIdList(ParserData& data);
+		static AstNode* ParseNoexceptSpecification(ParserData& data);
 
 		// ===============================================================================================
 		// Parser Preprocessor Forward Declarations (internal)
 		// ===============================================================================================
+		static void Preprocess(const char* fileBeingParsed, const std::vector<std::filesystem::path>& includeDirs, ParserData& data);
+
 		// Preprocessor File
-		static PreprocessingAstNode* ParsePreprocessingFile();
-		static PreprocessingAstNode* ParseGroup();
-		static PreprocessingAstNode* ParseGroupPart();
-		static PreprocessingAstNode* ParseIfSection();
-		static PreprocessingAstNode* ParseIfGroup();
-		static PreprocessingAstNode* ParseElifGroups();
-		static PreprocessingAstNode* ParseElifGroup();
-		static PreprocessingAstNode* ParseElseGroup();
-		static PreprocessingAstNode* ParseControlLine();
-		static PreprocessingAstNode* ParseTextLine();
-		static PreprocessingAstNode* ParseNonDirective();
-		static PreprocessingAstNode* ParseIdentifierList();
-		static PreprocessingAstNode* ParseReplacementList();
-		static PreprocessingAstNode* ParsePPTokens();
-		static PreprocessingAstNode* ParseNumberLiteral();
+		static PreprocessingAstNode* ParsePreprocessingFile(ParserData& data);
+		static PreprocessingAstNode* ParseGroup(ParserData& data);
+		static PreprocessingAstNode* ParseGroupPart(ParserData& data);
+		static PreprocessingAstNode* ParseIfSection(ParserData& data);
+		static PreprocessingAstNode* ParseIfGroup(ParserData& data);
+		static PreprocessingAstNode* ParseElifGroups(ParserData& data);
+		static PreprocessingAstNode* ParseElifGroup(ParserData& data);
+		static PreprocessingAstNode* ParseElseGroup(ParserData& data);
+		static PreprocessingAstNode* ParseMacroInclude(ParserData& data);
+		static PreprocessingAstNode* ParseControlLine(ParserData& data);
+		static PreprocessingAstNode* ParseTextLine(ParserData& data);
+		static PreprocessingAstNode* ParseNonDirective(ParserData& data);
+		static PreprocessingAstNode* ParseIdentifierList(ParserData& data);
+		static PreprocessingAstNode* ParseReplacementList(ParserData& data);
+		static PreprocessingAstNode* ParsePPTokens(ParserData& data);
+		static PreprocessingAstNode* ParseNumberLiteral(ParserData& data);
 
 		// Preprocessor Stuff
-		static PreprocessingAstNode* ParsePreprocessingToken();
-		static PreprocessingAstNode* ParseHeaderName();
-		static PreprocessingAstNode* ParseCharacterLiteral();
-		static PreprocessingAstNode* ParseUserDefinedCharacterLiteral();
-		static PreprocessingAstNode* ParseStringLiteral();
-		static PreprocessingAstNode* ParseUserDefinedStringLiteral();
-		static PreprocessingAstNode* ParsePreprocessingOpOrPunc();
-		static PreprocessingAstNode* ParseHCharSequence();
-		static PreprocessingAstNode* ParseHChar();
-		static PreprocessingAstNode* ParseQCharSequence();
-		static PreprocessingAstNode* ParseQChar();
+		static PreprocessingAstNode* ParsePreprocessingToken(ParserData& data);
+		static PreprocessingAstNode* ParseHeaderName(ParserData& data);
+		static PreprocessingAstNode* ParseCharacterLiteral(ParserData& data);
+		static PreprocessingAstNode* ParseUserDefinedCharacterLiteral(ParserData& data);
+		static PreprocessingAstNode* ParseStringLiteral(ParserData& data);
+		static PreprocessingAstNode* ParseUserDefinedStringLiteral(ParserData& data);
+		static PreprocessingAstNode* ParsePreprocessingOpOrPunc(ParserData& data);
+		static PreprocessingAstNode* ParseHCharSequence(ParserData& data);
+		static PreprocessingAstNode* ParseHChar(ParserData& data);
+		static PreprocessingAstNode* ParseQCharSequence(ParserData& data);
+		static PreprocessingAstNode* ParseQChar(ParserData& data);
 
 		// ===============================================================================================
 		// Parser Implementation (internal)
@@ -3311,153 +3332,179 @@ namespace CppParser
 		// It has been modified where needed.
 		// ===============================================================================================
 		// Translation Unit
-		static AstNode* ParseTranslationUnit()
+		static void RemoveSpecialTokens(ParserData& data)
 		{
-			return ParseDeclarationSequence();
+			for (auto tokenIter = data.Tokens.begin(); tokenIter != data.Tokens.end();)
+			{
+				if (tokenIter->m_Type == TokenType::PREPROCESSING_FILE_BEGIN || tokenIter->m_Type == TokenType::PREPROCESSING_FILE_END)
+				{
+					ParserString::FreeString(tokenIter->m_Lexeme);
+					tokenIter = data.Tokens.erase(tokenIter);
+				}
+				else if (tokenIter->m_Type == TokenType::END_OF_FILE && tokenIter != data.Tokens.end() - 1)
+				{
+					ParserString::FreeString(tokenIter->m_Lexeme);
+					tokenIter = data.Tokens.erase(tokenIter);
+				}
+				else
+				{
+					tokenIter++;
+				}
+			}
+		}
+
+		static AstNode* ParseTranslationUnit(const char* fileBeingParsed, std::vector<std::filesystem::path>& includeDirs, ParserData& data)
+		{
+			data.Tokens.insert(data.Tokens.begin(), CppTokens::CreateToken(-1, -1, TokenType::PREPROCESSING_FILE_BEGIN, fileBeingParsed));
+			data.Tokens.push_back(CppTokens::CreateToken(-1, -1, TokenType::PREPROCESSING_FILE_END, fileBeingParsed));
+			Preprocess(fileBeingParsed, includeDirs, data);
+			RemoveSpecialTokens(data);
+			data.CurrentToken = 0;
+			return ParseDeclarationSequence(data);
 		}
 
 		// Expressions
-		static AstNode* ParsePrimaryExpression()
+		static AstNode* ParsePrimaryExpression(ParserData& data)
 		{
-			if (PeekIn({ TokenType::CHARACTER_LITERAL, TokenType::FLOATING_POINT_LITERAL, TokenType::INTEGER_LITERAL, TokenType::STRING_LITERAL }))
+			if (PeekIn(data, { TokenType::CHARACTER_LITERAL, TokenType::FLOATING_POINT_LITERAL, TokenType::INTEGER_LITERAL, TokenType::STRING_LITERAL }))
 			{
-				return GenerateLiteralNode(ConsumeCurrent(Peek()));
+				return GenerateLiteralNode(ConsumeCurrent(data, Peek(data)));
 			}
 
-			if (Peek() == TokenType::KW_THIS)
+			if (Peek(data) == TokenType::KW_THIS)
 			{
-				return GenerateThisNode(ConsumeCurrent(Peek()));
+				return GenerateThisNode(ConsumeCurrent(data, Peek(data)));
 			}
 
-			if (Match(TokenType::LEFT_PAREN))
+			if (Match(data, TokenType::LEFT_PAREN))
 			{
-				AstNode* expression = ParseExpression();
-				Consume(TokenType::RIGHT_PAREN);
+				AstNode* expression = ParseExpression(data);
+				Consume(data, TokenType::RIGHT_PAREN);
 				return GenerateGroupingNode(expression);
 			}
 
-			int backtrackPosition = CurrentToken;
-			AstNode* expr = ParseIdExpression();
+			int backtrackPosition = data.CurrentToken;
+			AstNode* expr = ParseIdExpression(data);
 			if (expr->success)
 			{
 				return expr;
 			}
 			FreeNode(expr);
-			BacktrackTo(backtrackPosition);
+			BacktrackTo(data, backtrackPosition);
 
-			AstNode* lambdaExpr = ParseLambdaExpression();
+			AstNode* lambdaExpr = ParseLambdaExpression(data);
 			if (lambdaExpr->success)
 			{
 				return lambdaExpr;
 			}
 			FreeNode(lambdaExpr);
-			BacktrackTo(backtrackPosition);
+			BacktrackTo(data, backtrackPosition);
 
 			return GenerateNoSuccessAstNode();
 		}
 
-		static AstNode* ParseIdExpression()
+		static AstNode* ParseIdExpression(ParserData& data)
 		{
-			int backtrackPosition = CurrentToken;
-			AstNode* unqualifiedId = ParseUnqualifiedId();
+			int backtrackPosition = data.CurrentToken;
+			AstNode* unqualifiedId = ParseUnqualifiedId(data);
 			if (unqualifiedId->success)
 			{
 				return unqualifiedId;
 			}
 			FreeNode(unqualifiedId);
-			BacktrackTo(backtrackPosition);
+			BacktrackTo(data, backtrackPosition);
 
-			AstNode* qualifiedId = ParseQualifiedId();
+			AstNode* qualifiedId = ParseQualifiedId(data);
 			if (qualifiedId->success)
 			{
 				return qualifiedId;
 			}
 			FreeNode(qualifiedId);
-			BacktrackTo(backtrackPosition);
+			BacktrackTo(data, backtrackPosition);
 
 			return GenerateNoSuccessAstNode();
 		}
 
-		static AstNode* ParseUnqualifiedId()
+		static AstNode* ParseUnqualifiedId(ParserData& data)
 		{
-			if (Peek() == TokenType::IDENTIFIER)
+			if (Peek(data) == TokenType::IDENTIFIER)
 			{
-				return GenerateUnqualifiedIdNode(ConsumeCurrent(TokenType::IDENTIFIER));
+				return GenerateUnqualifiedIdNode(ConsumeCurrent(data, TokenType::IDENTIFIER));
 			}
 
-			int backtrackPosition = CurrentToken;
-			if (Match(TokenType::TILDE))
+			int backtrackPosition = data.CurrentToken;
+			if (Match(data, TokenType::TILDE))
 			{
-				AstNode* className = ParseClassName();
+				AstNode* className = ParseClassName(data);
 				if (className->success)
 				{
 					return GenerateUnqualifiedIdDtorClassNode(className);
 				}
 				FreeNode(className);
-				BacktrackTo(backtrackPosition);
+				BacktrackTo(data, backtrackPosition);
 
-				Consume(TokenType::TILDE);
-				AstNode* decltypeSpecifier = ParseDecltypeSpecifier();
+				Consume(data, TokenType::TILDE);
+				AstNode* decltypeSpecifier = ParseDecltypeSpecifier(data);
 				if (decltypeSpecifier->success)
 				{
 					return GenerateUnqualifiedIdDtorDecltypeNode(decltypeSpecifier);
 				}
 				FreeNode(decltypeSpecifier);
 			}
-			BacktrackTo(backtrackPosition);
+			BacktrackTo(data, backtrackPosition);
 
-			AstNode* operatorFunctionId = ParseOperatorFunctionId();
+			AstNode* operatorFunctionId = ParseOperatorFunctionId(data);
 			if (operatorFunctionId->success)
 			{
 				return operatorFunctionId;
 			}
 			FreeNode(operatorFunctionId);
-			BacktrackTo(backtrackPosition);
+			BacktrackTo(data, backtrackPosition);
 
-			AstNode* conversionFunctionId = ParseConversionFunctionId();
+			AstNode* conversionFunctionId = ParseConversionFunctionId(data);
 			if (conversionFunctionId->success)
 			{
 				return conversionFunctionId;
 			}
 			FreeNode(conversionFunctionId);
-			BacktrackTo(backtrackPosition);
+			BacktrackTo(data, backtrackPosition);
 
-			AstNode* literalOperatorId = ParseLiteralOperatorId();
+			AstNode* literalOperatorId = ParseLiteralOperatorId(data);
 			if (literalOperatorId->success)
 			{
 				return literalOperatorId;
 			}
 			FreeNode(literalOperatorId);
-			BacktrackTo(backtrackPosition);
+			BacktrackTo(data, backtrackPosition);
 
-			AstNode* templateId = ParseTemplateId();
+			AstNode* templateId = ParseTemplateId(data);
 			if (templateId->success)
 			{
 				return templateId;
 			}
 			FreeNode(templateId);
-			BacktrackTo(backtrackPosition);
+			BacktrackTo(data, backtrackPosition);
 			return GenerateNoSuccessAstNode();
 		}
 
-		static AstNode* ParseQualifiedId()
+		static AstNode* ParseQualifiedId(ParserData& data)
 		{
-			int backtrackPosition = CurrentToken;
-			bool hasNamespaceScope = Peek() == TokenType::COLON;
-			if (Peek() == TokenType::COLON)
+			int backtrackPosition = data.CurrentToken;
+			bool hasNamespaceScope = Peek(data) == TokenType::COLON;
+			if (Peek(data) == TokenType::COLON)
 			{
-				Consume(TokenType::COLON);
-				Consume(TokenType::COLON);
+				Consume(data, TokenType::COLON);
+				Consume(data, TokenType::COLON);
 			}
 
 			AstNode* nestedNameSpecifier = GenerateNoSuccessAstNode();
-			if (MatchBeforeSemicolon(TokenType::COLON, TokenType::COLON))
+			if (MatchBeforeSemicolon(data, TokenType::COLON, TokenType::COLON))
 			{
 				FreeNode(nestedNameSpecifier);
-				nestedNameSpecifier = ParseNestedNameSpecifier();
+				nestedNameSpecifier = ParseNestedNameSpecifier(data);
 			}
-			bool hasTemplateKeyword = Match(TokenType::KW_TEMPLATE);
-			AstNode* unqualifiedId = ParseUnqualifiedId();
+			bool hasTemplateKeyword = Match(data, TokenType::KW_TEMPLATE);
+			AstNode* unqualifiedId = ParseUnqualifiedId(data);
 			if (!hasNamespaceScope)
 			{
 				// This can only be a nested-namespace-specifier if it doesn't have a namespace scope
@@ -3467,7 +3514,7 @@ namespace CppParser
 				}
 				FreeNode(nestedNameSpecifier);
 				FreeNode(unqualifiedId);
-				BacktrackTo(backtrackPosition);
+				BacktrackTo(data, backtrackPosition);
 				return GenerateNoSuccessAstNode();
 			}
 
@@ -3477,165 +3524,165 @@ namespace CppParser
 			}
 			FreeNode(nestedNameSpecifier);
 			FreeNode(unqualifiedId);
-			BacktrackTo(backtrackPosition);
+			BacktrackTo(data, backtrackPosition);
 
-			if (Peek() == TokenType::IDENTIFIER)
+			if (Peek(data) == TokenType::IDENTIFIER)
 			{
-				return GenerateQualifiedIdNode(ConsumeCurrent(TokenType::IDENTIFIER));
+				return GenerateQualifiedIdNode(ConsumeCurrent(data, TokenType::IDENTIFIER));
 			}
 
-			AstNode* operatorFunctionId = ParseOperatorFunctionId();
+			AstNode* operatorFunctionId = ParseOperatorFunctionId(data);
 			if (operatorFunctionId->success)
 			{
 				return operatorFunctionId;
 			}
 			FreeNode(operatorFunctionId);
-			BacktrackTo(backtrackPosition);
+			BacktrackTo(data, backtrackPosition);
 
-			AstNode* literalOperatorId = ParseLiteralOperatorId();
+			AstNode* literalOperatorId = ParseLiteralOperatorId(data);
 			if (literalOperatorId->success)
 			{
 				return literalOperatorId;
 			}
 			FreeNode(literalOperatorId);
-			BacktrackTo(backtrackPosition);
+			BacktrackTo(data, backtrackPosition);
 
-			AstNode* templateId = ParseTemplateId();
+			AstNode* templateId = ParseTemplateId(data);
 			if (templateId->success)
 			{
 				return templateId;
 			}
 			FreeNode(templateId);
-			BacktrackTo(backtrackPosition);
+			BacktrackTo(data, backtrackPosition);
 
 			return GenerateNoSuccessAstNode();
 		}
 
-		static AstNode* ParseNestedNameSubSpecifier()
+		static AstNode* ParseNestedNameSubSpecifier(ParserData& data)
 		{
-			int backtrackPosition = CurrentToken;
-			AstNode* typeName = ParseTypeName();
+			int backtrackPosition = data.CurrentToken;
+			AstNode* typeName = ParseTypeName(data);
 			if (typeName->success)
 			{
-				if (Match(TokenType::COLON))
+				if (Match(data, TokenType::COLON))
 				{
-					Consume(TokenType::COLON);
+					Consume(data, TokenType::COLON);
 					return typeName;
 				}
 			}
 			FreeNode(typeName);
-			BacktrackTo(backtrackPosition);
+			BacktrackTo(data, backtrackPosition);
 
-			AstNode* namespaceName = ParseNamespaceName();
+			AstNode* namespaceName = ParseNamespaceName(data);
 			if (namespaceName->success)
 			{
-				if (Match(TokenType::COLON))
+				if (Match(data, TokenType::COLON))
 				{
-					Consume(TokenType::COLON);
+					Consume(data, TokenType::COLON);
 					return namespaceName;
 				}
 			}
 			FreeNode(namespaceName);
-			BacktrackTo(backtrackPosition);
+			BacktrackTo(data, backtrackPosition);
 
-			AstNode* decltypeSpecifier = ParseDecltypeSpecifier();
+			AstNode* decltypeSpecifier = ParseDecltypeSpecifier(data);
 			if (decltypeSpecifier->success)
 			{
-				if (Match(TokenType::COLON))
+				if (Match(data, TokenType::COLON))
 				{
-					Consume(TokenType::COLON);
+					Consume(data, TokenType::COLON);
 					return decltypeSpecifier;
 				}
 			}
 			FreeNode(decltypeSpecifier);
-			BacktrackTo(backtrackPosition);
+			BacktrackTo(data, backtrackPosition);
 
 			return GenerateNoSuccessAstNode();
 		}
 
-		static AstNode* ParseNestedNameSpecifier()
+		static AstNode* ParseNestedNameSpecifier(ParserData& data)
 		{
-			int backtrackPosition = CurrentToken;
-			AstNode* nestedNameSubSpecifier = ParseNestedNameSubSpecifier();
+			int backtrackPosition = data.CurrentToken;
+			AstNode* nestedNameSubSpecifier = ParseNestedNameSubSpecifier(data);
 			if (nestedNameSubSpecifier->success)
 			{
 				return nestedNameSubSpecifier;
 			}
 			FreeNode(nestedNameSubSpecifier);
-			BacktrackTo(backtrackPosition);
+			BacktrackTo(data, backtrackPosition);
 
 			// If the next token is not an identifier, or a template OR there are no more semicolons, then return no success
-			if (!PeekIn({ TokenType::IDENTIFIER, TokenType::KW_TEMPLATE }) || !MatchBeforeSemicolon(TokenType::COLON, TokenType::COLON))
+			if (!PeekIn(data, { TokenType::IDENTIFIER, TokenType::KW_TEMPLATE }) || !MatchBeforeSemicolon(data, TokenType::COLON, TokenType::COLON))
 			{
 				return GenerateNoSuccessAstNode();
 			}
-			AstNode* nestedNameSpecifier = ParseNestedNameSpecifier();
-			if (Peek() == TokenType::IDENTIFIER)
+			AstNode* nestedNameSpecifier = ParseNestedNameSpecifier(data);
+			if (Peek(data) == TokenType::IDENTIFIER)
 			{
-				Token id = ConsumeCurrent(TokenType::IDENTIFIER);
-				Consume(TokenType::COLON);
-				Consume(TokenType::COLON);
+				Token id = ConsumeCurrent(data, TokenType::IDENTIFIER);
+				Consume(data, TokenType::COLON);
+				Consume(data, TokenType::COLON);
 				return GenerateNestedNamespaceSpecifierIdNode(nestedNameSpecifier, id);
 			}
 
-			bool hasTemplateKeyword = Match(TokenType::KW_TEMPLATE);
-			AstNode* simpleTemplateId = ParseSimpleTemplateId();
+			bool hasTemplateKeyword = Match(data, TokenType::KW_TEMPLATE);
+			AstNode* simpleTemplateId = ParseSimpleTemplateId(data);
 			if (simpleTemplateId->success)
 			{
-				Consume(TokenType::COLON);
-				Consume(TokenType::COLON);
+				Consume(data, TokenType::COLON);
+				Consume(data, TokenType::COLON);
 				return GenerateNestedNamespaceSpecifierTemplateNode(nestedNameSpecifier, hasTemplateKeyword, simpleTemplateId);
 			}
 			FreeNode(nestedNameSpecifier);
 			FreeNode(simpleTemplateId);
-			BacktrackTo(backtrackPosition);
+			BacktrackTo(data, backtrackPosition);
 			return GenerateNoSuccessAstNode();
 		}
 
 		// Lambdas
-		static AstNode* ParseLambdaExpression()
+		static AstNode* ParseLambdaExpression(ParserData& data)
 		{
-			int backtrackPosition = CurrentToken;
-			AstNode* lambdaIntroducer = ParseLambdaIntroducer();
+			int backtrackPosition = data.CurrentToken;
+			AstNode* lambdaIntroducer = ParseLambdaIntroducer(data);
 			if (!lambdaIntroducer->success)
 			{
 				FreeNode(lambdaIntroducer);
-				BacktrackTo(backtrackPosition);
+				BacktrackTo(data, backtrackPosition);
 				return GenerateNoSuccessAstNode();
 			}
 
 			// This is optional, so it's fine if it doesn't succeed
-			backtrackPosition = CurrentToken;
-			AstNode* lambdaDeclarator = ParseLambdaDeclarator();
+			backtrackPosition = data.CurrentToken;
+			AstNode* lambdaDeclarator = ParseLambdaDeclarator(data);
 			if (!lambdaDeclarator->success)
 			{
-				BacktrackTo(backtrackPosition);
+				BacktrackTo(data, backtrackPosition);
 			}
 
-			backtrackPosition = CurrentToken;
-			AstNode* compoundStatement = ParseCompoundStatement();
+			backtrackPosition = data.CurrentToken;
+			AstNode* compoundStatement = ParseCompoundStatement(data);
 			if (!compoundStatement->success)
 			{
 				FreeNode(lambdaIntroducer);
-				BacktrackTo(backtrackPosition);
+				BacktrackTo(data, backtrackPosition);
 				return GenerateNoSuccessAstNode();
 			}
 
 			return GenerateLambdaExpressionNode(lambdaIntroducer, lambdaDeclarator, compoundStatement);
 		}
 
-		static AstNode* ParseLambdaIntroducer()
+		static AstNode* ParseLambdaIntroducer(ParserData& data)
 		{
-			if (Match(TokenType::LEFT_BRACKET))
+			if (Match(data, TokenType::LEFT_BRACKET))
 			{
-				int backtrackPosition = CurrentToken;
+				int backtrackPosition = data.CurrentToken;
 				// Lambda capture is optional, so it's ok if it fails
-				AstNode* lambdaCapture = ParseLambdaCapture();
+				AstNode* lambdaCapture = ParseLambdaCapture(data);
 				if (!lambdaCapture->success)
 				{
-					BacktrackTo(backtrackPosition);
+					BacktrackTo(data, backtrackPosition);
 				}
-				Consume(TokenType::RIGHT_BRACKET);
+				Consume(data, TokenType::RIGHT_BRACKET);
 
 				return GenerateLambdaIntroducerNode(lambdaCapture);
 			}
@@ -3643,107 +3690,107 @@ namespace CppParser
 			return GenerateNoSuccessAstNode();
 		}
 
-		static AstNode* ParseLambdaCapture()
+		static AstNode* ParseLambdaCapture(ParserData& data)
 		{
 			Token captureDefault;
 			captureDefault.m_Type = TokenType::None;
-			if (Peek() == TokenType::AND || Peek() == TokenType::EQUAL)
+			if (Peek(data) == TokenType::AND || Peek(data) == TokenType::EQUAL)
 			{
-				captureDefault = ConsumeCurrent(Peek());
+				captureDefault = ConsumeCurrent(data, Peek(data));
 			}
 
-			if (captureDefault.m_Type != TokenType::None && Match(TokenType::COMMA))
+			if (captureDefault.m_Type != TokenType::None && Match(data, TokenType::COMMA))
 			{
-				return GenerateLambdaCaptureNode(captureDefault, ParseCaptureList());
+				return GenerateLambdaCaptureNode(captureDefault, ParseCaptureList(data));
 			}
 
 			if (captureDefault.m_Type == TokenType::None)
 			{
-				return GenerateLambdaCaptureNode(captureDefault, ParseCaptureList());
+				return GenerateLambdaCaptureNode(captureDefault, ParseCaptureList(data));
 			}
 
 			return GenerateNoSuccessAstNode();
 		}
 
-		static AstNode* ParseCaptureList()
+		static AstNode* ParseCaptureList(ParserData& data)
 		{
-			AstNode* result = ParseCapture();
+			AstNode* result = ParseCapture(data);
 
-			while (Match(TokenType::COMMA))
+			while (Match(data, TokenType::COMMA))
 			{
-				result = GenerateLambdaCaptureListNode(result, ParseCaptureList());
+				result = GenerateLambdaCaptureListNode(result, ParseCaptureList(data));
 			}
 
-			if (Match(TokenType::DOT))
+			if (Match(data, TokenType::DOT))
 			{
-				Consume(TokenType::DOT);
-				Consume(TokenType::DOT);
+				Consume(data, TokenType::DOT);
+				Consume(data, TokenType::DOT);
 			}
 
 			return GenerateLambdaCaptureListNode(result, nullptr);
 		}
 
-		static AstNode* ParseCapture()
+		static AstNode* ParseCapture(ParserData& data)
 		{
-			int backtrackPosition = CurrentToken;
-			if (Match(TokenType::AND))
+			int backtrackPosition = data.CurrentToken;
+			if (Match(data, TokenType::AND))
 			{
-				if (Peek() == TokenType::IDENTIFIER)
+				if (Peek(data) == TokenType::IDENTIFIER)
 				{
-					return GenerateCaptureNode(ConsumeCurrent(TokenType::IDENTIFIER));
+					return GenerateCaptureNode(ConsumeCurrent(data, TokenType::IDENTIFIER));
 				}
 
-				BacktrackTo(backtrackPosition);
+				BacktrackTo(data, backtrackPosition);
 				return GenerateNoSuccessAstNode();
 			}
 
-			if (Peek() == TokenType::KW_THIS)
+			if (Peek(data) == TokenType::KW_THIS)
 			{
-				return GenerateThisNode(ConsumeCurrent(TokenType::KW_THIS));
+				return GenerateThisNode(ConsumeCurrent(data, TokenType::KW_THIS));
 			}
 
-			if (Peek() == TokenType::IDENTIFIER)
+			if (Peek(data) == TokenType::IDENTIFIER)
 			{
-				return GenerateCaptureNode(ConsumeCurrent(TokenType::IDENTIFIER));
+				return GenerateCaptureNode(ConsumeCurrent(data, TokenType::IDENTIFIER));
 			}
 
 			return GenerateNoSuccessAstNode();
 		}
 
-		static AstNode* ParseLambdaDeclarator()
+		static AstNode* ParseLambdaDeclarator(ParserData& data)
 		{
-			if (Match(TokenType::LEFT_PAREN))
+			if (Match(data, TokenType::LEFT_PAREN))
 			{
-				AstNode* parameterDeclarationClause = ParseParameterDeclarationClause();
-				Consume(TokenType::RIGHT_PAREN);
+				AstNode* parameterDeclarationClause = ParseParameterDeclarationClause(data);
+				Consume(data, TokenType::RIGHT_PAREN);
 
-				bool isMutable = Match(TokenType::KW_MUTABLE);
+				bool isMutable = Match(data, TokenType::KW_MUTABLE);
 
-				int backtrackPosition = CurrentToken;
-				AstNode* exceptionSpec = ParseExceptionSpecification();
+				int backtrackPosition = data.CurrentToken;
+				AstNode* exceptionSpec = ParseExceptionSpecification(data);
 				if (!exceptionSpec->success)
 				{
 					FreeNode(exceptionSpec);
 					exceptionSpec = GenerateNoSuccessAstNode();
-					BacktrackTo(backtrackPosition);
+					BacktrackTo(data, backtrackPosition);
 				}
 
-				backtrackPosition = CurrentToken;
-				AstNode* attributeSpecifierSeq = ParseAttributeSpecifierSequence();
+				backtrackPosition = data.CurrentToken;
+				AstNode* attributeSpecifierSeq = ParseAttributeSpecifierSequence(data);
 				if (!attributeSpecifierSeq->success)
 				{
 					FreeNode(attributeSpecifierSeq);
 					attributeSpecifierSeq = GenerateNoSuccessAstNode();
-					BacktrackTo(backtrackPosition);
+					BacktrackTo(data, backtrackPosition);
 				}
 
-				backtrackPosition = CurrentToken;
-				AstNode* trailingReturnType = ParseTrailingReturnType();
+				backtrackPosition = data.CurrentToken;
+				AstNode* trailingReturnType = ParseTrailingReturnType(data);
 				if (!trailingReturnType->success)
 				{
 					FreeNode(trailingReturnType);
 					trailingReturnType = GenerateNoSuccessAstNode();
-					BacktrackTo(backtrackPosition);
+					BacktrackTo(data, backtrackPosition);
 				}
 
 				return GenerateLambdaDeclaratorNode(parameterDeclarationClause, isMutable, exceptionSpec, attributeSpecifierSeq, trailingReturnType);
@@ -3753,134 +3800,134 @@ namespace CppParser
 		}
 
 		// Postfix Expressions
-		static AstNode* ParsePostfixExpression()
+		static AstNode* ParsePostfixExpression(ParserData& data)
 		{
 			// TODO: This one scares me test pretty good, otherwise I have a feeling you will get infinite loops which results in horrible lag
 			// Try to look ahead and make sure we don't recurse further if it's not possible
-			bool shouldRecurse = LookAheadBeforeSemicolon({ TokenType::LEFT_BRACKET, TokenType::LEFT_PAREN, TokenType::DOT, TokenType::ARROW, TokenType::PLUS_PLUS, TokenType::MINUS_MINUS });
+			bool shouldRecurse = LookAheadBeforeSemicolon(data, { TokenType::LEFT_BRACKET, TokenType::LEFT_PAREN, TokenType::DOT, TokenType::ARROW, TokenType::PLUS_PLUS, TokenType::MINUS_MINUS });
 
-			int backtrackPosition = CurrentToken;
-			AstNode* primaryExpression = ParsePrimaryExpression();
+			int backtrackPosition = data.CurrentToken;
+			AstNode* primaryExpression = ParsePrimaryExpression(data);
 			if (primaryExpression->success)
 			{
 				return primaryExpression;
 			}
 			FreeNode(primaryExpression);
-			BacktrackTo(backtrackPosition);
+			BacktrackTo(data, backtrackPosition);
 
-			AstNode* simpleTypeSpecifier = ParseSimpleTypeSpecifier();
+			AstNode* simpleTypeSpecifier = ParseSimpleTypeSpecifier(data);
 			if (simpleTypeSpecifier->success)
 			{
-				if (Match(TokenType::LEFT_PAREN))
+				if (Match(data, TokenType::LEFT_PAREN))
 				{
 					// Optional
-					AstNode* expressionList = ParseExpressionList();
-					Consume(TokenType::RIGHT_PAREN);
+					AstNode* expressionList = ParseExpressionList(data);
+					Consume(data, TokenType::RIGHT_PAREN);
 					return GeneratePostfixSimpleTypeExpressionListNode(simpleTypeSpecifier, expressionList);
 				}
 
-				AstNode* bracedInitList = ParseBracedInitList();
+				AstNode* bracedInitList = ParseBracedInitList(data);
 				if (!bracedInitList->success)
 				{
 					FreeNode(simpleTypeSpecifier);
 					FreeNode(bracedInitList);
-					BacktrackTo(backtrackPosition);
+					BacktrackTo(data, backtrackPosition);
 					return GenerateNoSuccessAstNode();
 				}
 				return GeneratePostfixSimpleTypeBraceListNode(simpleTypeSpecifier, bracedInitList);
 			}
 			FreeNode(simpleTypeSpecifier);
-			BacktrackTo(backtrackPosition);
+			BacktrackTo(data, backtrackPosition);
 
-			AstNode* typenameSpecifier = ParseTypenameSpecifier();
+			AstNode* typenameSpecifier = ParseTypenameSpecifier(data);
 			if (typenameSpecifier->success)
 			{
-				if (Match(TokenType::LEFT_PAREN))
+				if (Match(data, TokenType::LEFT_PAREN))
 				{
 					// Optional
-					AstNode* expressionList = ParseExpressionList();
-					Consume(TokenType::RIGHT_PAREN);
+					AstNode* expressionList = ParseExpressionList(data);
+					Consume(data, TokenType::RIGHT_PAREN);
 					return GeneratePostfixTypenameSpecExpressionListNode(simpleTypeSpecifier, expressionList);
 				}
 
-				AstNode* bracedInitList = ParseBracedInitList();
+				AstNode* bracedInitList = ParseBracedInitList(data);
 				if (!bracedInitList->success)
 				{
 					FreeNode(simpleTypeSpecifier);
 					FreeNode(bracedInitList);
-					BacktrackTo(backtrackPosition);
+					BacktrackTo(data, backtrackPosition);
 					return GenerateNoSuccessAstNode();
 				}
 				return GeneratePostfixTypenameSpecBraceListNode(simpleTypeSpecifier, bracedInitList);
 			}
 			FreeNode(typenameSpecifier);
-			BacktrackTo(backtrackPosition);
+			BacktrackTo(data, backtrackPosition);
 
-			if (Match(TokenType::KW_DYNAMIC_CAST))
+			if (Match(data, TokenType::KW_DYNAMIC_CAST))
 			{
-				Consume(TokenType::LEFT_ANGLE_BRACKET);
-				AstNode* typeId = ParseTypeId();
-				Consume(TokenType::RIGHT_ANGLE_BRACKET);
-				Consume(TokenType::LEFT_PAREN);
-				AstNode* expression = ParseExpression();
-				Consume(TokenType::RIGHT_PAREN);
+				Consume(data, TokenType::LEFT_ANGLE_BRACKET);
+				AstNode* typeId = ParseTypeId(data);
+				Consume(data, TokenType::RIGHT_ANGLE_BRACKET);
+				Consume(data, TokenType::LEFT_PAREN);
+				AstNode* expression = ParseExpression(data);
+				Consume(data, TokenType::RIGHT_PAREN);
 				return GeneratePostfixCastNode(typeId, expression, CastType::DynamicCast);
 			}
 
-			if (Match(TokenType::KW_STATIC_CAST))
+			if (Match(data, TokenType::KW_STATIC_CAST))
 			{
-				Consume(TokenType::LEFT_ANGLE_BRACKET);
-				AstNode* typeId = ParseTypeId();
-				Consume(TokenType::RIGHT_ANGLE_BRACKET);
-				Consume(TokenType::LEFT_PAREN);
-				AstNode* expression = ParseExpression();
-				Consume(TokenType::RIGHT_PAREN);
+				Consume(data, TokenType::LEFT_ANGLE_BRACKET);
+				AstNode* typeId = ParseTypeId(data);
+				Consume(data, TokenType::RIGHT_ANGLE_BRACKET);
+				Consume(data, TokenType::LEFT_PAREN);
+				AstNode* expression = ParseExpression(data);
+				Consume(data, TokenType::RIGHT_PAREN);
 				return GeneratePostfixCastNode(typeId, expression, CastType::StaticCast);
 			}
 
-			if (Match(TokenType::KW_REINTERPRET_CAST))
+			if (Match(data, TokenType::KW_REINTERPRET_CAST))
 			{
-				Consume(TokenType::LEFT_ANGLE_BRACKET);
-				AstNode* typeId = ParseTypeId();
-				Consume(TokenType::RIGHT_ANGLE_BRACKET);
-				Consume(TokenType::LEFT_PAREN);
-				AstNode* expression = ParseExpression();
-				Consume(TokenType::RIGHT_PAREN);
+				Consume(data, TokenType::LEFT_ANGLE_BRACKET);
+				AstNode* typeId = ParseTypeId(data);
+				Consume(data, TokenType::RIGHT_ANGLE_BRACKET);
+				Consume(data, TokenType::LEFT_PAREN);
+				AstNode* expression = ParseExpression(data);
+				Consume(data, TokenType::RIGHT_PAREN);
 				return GeneratePostfixCastNode(typeId, expression, CastType::ReinterpretCast);
 			}
 
-			if (Match(TokenType::KW_CONST_CAST))
+			if (Match(data, TokenType::KW_CONST_CAST))
 			{
-				Consume(TokenType::LEFT_ANGLE_BRACKET);
-				AstNode* typeId = ParseTypeId();
-				Consume(TokenType::RIGHT_ANGLE_BRACKET);
-				Consume(TokenType::LEFT_PAREN);
-				AstNode* expression = ParseExpression();
-				Consume(TokenType::RIGHT_PAREN);
+				Consume(data, TokenType::LEFT_ANGLE_BRACKET);
+				AstNode* typeId = ParseTypeId(data);
+				Consume(data, TokenType::RIGHT_ANGLE_BRACKET);
+				Consume(data, TokenType::LEFT_PAREN);
+				AstNode* expression = ParseExpression(data);
+				Consume(data, TokenType::RIGHT_PAREN);
 				return GeneratePostfixCastNode(typeId, expression, CastType::ConstCast);
 			}
 
-			if (Match(TokenType::KW_TYPEID))
+			if (Match(data, TokenType::KW_TYPEID))
 			{
-				Consume(TokenType::LEFT_PAREN);
-				int backtrackPos2 = CurrentToken;
-				AstNode* expression = ParseExpression();
+				Consume(data, TokenType::LEFT_PAREN);
+				int backtrackPos2 = data.CurrentToken;
+				AstNode* expression = ParseExpression(data);
 				if (expression->success)
 				{
-					Consume(TokenType::RIGHT_PAREN);
+					Consume(data, TokenType::RIGHT_PAREN);
 					return GeneratePostfixTypeIdExpressionNode(expression);
 				}
 				FreeNode(expression);
-				BacktrackTo(backtrackPos2);
+				BacktrackTo(data, backtrackPos2);
 
-				AstNode* typeId = ParseTypeId();
+				AstNode* typeId = ParseTypeId(data);
 				if (typeId->success)
 				{
-					Consume(TokenType::RIGHT_PAREN);
+					Consume(data, TokenType::RIGHT_PAREN);
 					return GeneratePostfixTypeIdNode(typeId);
 				}
 				FreeNode(typeId);
-				BacktrackTo(backtrackPosition);
+				BacktrackTo(data, backtrackPosition);
 				return GenerateNoSuccessAstNode();
 			}
 
@@ -3889,42 +3936,42 @@ namespace CppParser
 				return GenerateNoSuccessAstNode();
 			}
 
-			AstNode* postfixExpression = ParsePostfixExpression();
-			if (Match(TokenType::LEFT_BRACKET))
+			AstNode* postfixExpression = ParsePostfixExpression(data);
+			if (Match(data, TokenType::LEFT_BRACKET))
 			{
-				int backtrackPosition2 = CurrentToken;
-				AstNode* expression = ParseExpression();
+				int backtrackPosition2 = data.CurrentToken;
+				AstNode* expression = ParseExpression(data);
 				if (expression->success)
 				{
-					Consume(TokenType::RIGHT_BRACKET);
+					Consume(data, TokenType::RIGHT_BRACKET);
 					return GeneratePostfixBracketExpressionNode(postfixExpression, expression);
 				}
 				FreeNode(expression);
-				BacktrackTo(backtrackPosition2);
+				BacktrackTo(data, backtrackPosition2);
 
 				// Optional
-				AstNode* bracedInitList = ParseBracedInitList();
-				Consume(TokenType::RIGHT_BRACKET);
+				AstNode* bracedInitList = ParseBracedInitList(data);
+				Consume(data, TokenType::RIGHT_BRACKET);
 				return GeneratePostfixBracketBraceListNode(postfixExpression, bracedInitList);
 			}
 
-			if (Match(TokenType::LEFT_PAREN))
+			if (Match(data, TokenType::LEFT_PAREN))
 			{
 				// Optional
-				AstNode* expressionList = ParseExpressionList();
-				Consume(TokenType::RIGHT_PAREN);
+				AstNode* expressionList = ParseExpressionList(data);
+				Consume(data, TokenType::RIGHT_PAREN);
 				return GeneratePostfixParenExpressionListNode(postfixExpression, expressionList);
 			}
 
-			bool isDot = Match(TokenType::DOT);
-			bool isArrow = Match(TokenType::ARROW);
+			bool isDot = Match(data, TokenType::DOT);
+			bool isArrow = Match(data, TokenType::ARROW);
 			if (isDot || isArrow)
 			{
 				MemberOperatorType memberOp = isDot ? MemberOperatorType::DotOperator : MemberOperatorType::ArrowOperator;
-				bool hasTemplateKeyword = Match(TokenType::KW_TEMPLATE);
+				bool hasTemplateKeyword = Match(data, TokenType::KW_TEMPLATE);
 				if (hasTemplateKeyword)
 				{
-					AstNode* idExpression = ParseIdExpression();
+					AstNode* idExpression = ParseIdExpression(data);
 					if (!idExpression->success)
 					{
 						FreeNode(postfixExpression);
@@ -3933,25 +3980,25 @@ namespace CppParser
 					return GeneratePostfixMemberIdExpressionNode(postfixExpression, idExpression, hasTemplateKeyword, memberOp);
 				}
 
-				int backtrackPosition2 = CurrentToken;
-				AstNode* idExpression = ParseIdExpression();
+				int backtrackPosition2 = data.CurrentToken;
+				AstNode* idExpression = ParseIdExpression(data);
 				if (idExpression->success)
 				{
 					return GeneratePostfixMemberIdExpressionNode(postfixExpression, idExpression, hasTemplateKeyword, memberOp);
 				}
 				FreeNode(idExpression);
-				BacktrackTo(backtrackPosition2);
+				BacktrackTo(data, backtrackPosition2);
 
-				AstNode* pseudoDestructorName = ParsePseudoDestructorName();
+				AstNode* pseudoDestructorName = ParsePseudoDestructorName(data);
 				return GeneratePostfixPseudoDestructorNode(postfixExpression, pseudoDestructorName, memberOp);
 			}
 
-			if (Match(TokenType::PLUS_PLUS))
+			if (Match(data, TokenType::PLUS_PLUS))
 			{
 				return GeneratePostfixPlusPlusNode(postfixExpression);
 			}
 
-			if (Match(TokenType::MINUS_MINUS))
+			if (Match(data, TokenType::MINUS_MINUS))
 			{
 				return GeneratePostfixMinusMinusNode(postfixExpression);
 			}
@@ -3960,51 +4007,51 @@ namespace CppParser
 			return GenerateNoSuccessAstNode();
 		}
 
-		static AstNode* ParseExpressionList()
+		static AstNode* ParseExpressionList(ParserData& data)
 		{
-			return ParseInitializerList();
+			return ParseInitializerList(data);
 		}
 
-		static AstNode* ParsePseudoDestructorName()
+		static AstNode* ParsePseudoDestructorName(ParserData& data)
 		{
-			if (Match(TokenType::TILDE))
+			if (Match(data, TokenType::TILDE))
 			{
-				AstNode* decltypeSpecifier = ParseDecltypeSpecifier();
+				AstNode* decltypeSpecifier = ParseDecltypeSpecifier(data);
 				return GeneratePseudoDestructorDecltypeNode(decltypeSpecifier);
 			}
 
-			int backtrackPosition = CurrentToken;
-			if (Match(TokenType::COLON))
+			int backtrackPosition = data.CurrentToken;
+			if (Match(data, TokenType::COLON))
 			{
-				Consume(TokenType::COLON);
+				Consume(data, TokenType::COLON);
 			}
 
 			AstNode* nestedNameSpecifier = GenerateNoSuccessAstNode();
-			if (MatchBeforeSemicolon(TokenType::COLON, TokenType::COLON))
+			if (MatchBeforeSemicolon(data, TokenType::COLON, TokenType::COLON))
 			{
 				FreeNode(nestedNameSpecifier);
-				nestedNameSpecifier = ParseNestedNameSpecifier();
+				nestedNameSpecifier = ParseNestedNameSpecifier(data);
 			}
-			if (Match(TokenType::KW_TEMPLATE))
+			if (Match(data, TokenType::KW_TEMPLATE))
 			{
 				if (!nestedNameSpecifier->success)
 				{
 					FreeNode(nestedNameSpecifier);
-					BacktrackTo(backtrackPosition);
+					BacktrackTo(data, backtrackPosition);
 					return GenerateNoSuccessAstNode();
 				}
 
-				AstNode* simpleTemplateId = ParseSimpleTemplateId();
-				Consume(TokenType::COLON);
-				Consume(TokenType::COLON);
-				Consume(TokenType::TILDE);
-				AstNode* typeName = ParseTypeName();
+				AstNode* simpleTemplateId = ParseSimpleTemplateId(data);
+				Consume(data, TokenType::COLON);
+				Consume(data, TokenType::COLON);
+				Consume(data, TokenType::TILDE);
+				AstNode* typeName = ParseTypeName(data);
 				if (!typeName->success)
 				{
 					FreeNode(nestedNameSpecifier);
 					FreeNode(simpleTemplateId);
 					FreeNode(typeName);
-					BacktrackTo(backtrackPosition);
+					BacktrackTo(data, backtrackPosition);
 					return GenerateNoSuccessAstNode();
 				}
 
@@ -4012,32 +4059,32 @@ namespace CppParser
 			}
 
 			// Nested name specifier is optional at this point
-			if (Match(TokenType::TILDE))
+			if (Match(data, TokenType::TILDE))
 			{
-				AstNode* typeName = ParseTypeName();
+				AstNode* typeName = ParseTypeName(data);
 				if (!typeName->success)
 				{
 					FreeNode(nestedNameSpecifier);
 					FreeNode(typeName);
-					BacktrackTo(backtrackPosition);
+					BacktrackTo(data, backtrackPosition);
 					return GenerateNoSuccessAstNode();
 				}
 
 				return GeneratePseudoDestructorNode(nestedNameSpecifier, typeName);
 			}
 
-			AstNode* nestedTypeName = ParseTypeName();
-			if (Match(TokenType::COLON))
+			AstNode* nestedTypeName = ParseTypeName(data);
+			if (Match(data, TokenType::COLON))
 			{
-				Consume(TokenType::COLON);
-				Consume(TokenType::TILDE);
-				AstNode* typeName = ParseTypeName();
+				Consume(data, TokenType::COLON);
+				Consume(data, TokenType::TILDE);
+				AstNode* typeName = ParseTypeName(data);
 				if (!typeName->success)
 				{
 					FreeNode(nestedNameSpecifier);
 					FreeNode(nestedTypeName);
 					FreeNode(typeName);
-					BacktrackTo(backtrackPosition);
+					BacktrackTo(data, backtrackPosition);
 					return GenerateNoSuccessAstNode();
 				}
 
@@ -4046,139 +4093,139 @@ namespace CppParser
 
 			FreeNode(nestedTypeName);
 			FreeNode(nestedNameSpecifier);
-			BacktrackTo(backtrackPosition);
+			BacktrackTo(data, backtrackPosition);
 			return GenerateNoSuccessAstNode();
 		}
 
 		// Unary Expressions
-		static AstNode* ParseUnaryExpression()
+		static AstNode* ParseUnaryExpression(ParserData& data)
 		{
-			int backtrackCursor = CurrentToken;
-			AstNode* postfix = ParsePostfixExpression();
+			int backtrackCursor = data.CurrentToken;
+			AstNode* postfix = ParsePostfixExpression(data);
 			if (postfix->success)
 			{
 				return postfix;
 			}
 			FreeNode(postfix);
-			BacktrackTo(backtrackCursor);
+			BacktrackTo(data, backtrackCursor);
 
-			if (Peek() == TokenType::PLUS_PLUS || Peek() == TokenType::MINUS_MINUS || Peek() == TokenType::STAR || Peek() == TokenType::AND ||
-				Peek() == TokenType::PLUS || Peek() == TokenType::MINUS || Peek() == TokenType::BANG || Peek() == TokenType::TILDE)
+			if (Peek(data) == TokenType::PLUS_PLUS || Peek(data) == TokenType::MINUS_MINUS || Peek(data) == TokenType::STAR || Peek(data) == TokenType::AND ||
+				Peek(data) == TokenType::PLUS || Peek(data) == TokenType::MINUS || Peek(data) == TokenType::BANG || Peek(data) == TokenType::TILDE)
 			{
-				return GenerateUnaryExpressionNode(ParseOverloadableOperator(), ParseCastExpression());
+				return GenerateUnaryExpressionNode(ParseOverloadableOperator(data), ParseCastExpression(data));
 			}
 
-			if (Match(TokenType::KW_SIZEOF))
+			if (Match(data, TokenType::KW_SIZEOF))
 			{
-				if (Match(TokenType::LEFT_PAREN))
+				if (Match(data, TokenType::LEFT_PAREN))
 				{
-					AstNode* typeId = ParseTypeId();
-					Consume(TokenType::RIGHT_PAREN);
+					AstNode* typeId = ParseTypeId(data);
+					Consume(data, TokenType::RIGHT_PAREN);
 					return GenerateSizeofExpressionNode(typeId);
 				}
 
-				if (Match(TokenType::DOT))
+				if (Match(data, TokenType::DOT))
 				{
-					Consume(TokenType::DOT);
-					Consume(TokenType::DOT);
-					Consume(TokenType::LEFT_PAREN);
-					Token identifier = ConsumeCurrent(TokenType::IDENTIFIER);
-					Consume(TokenType::RIGHT_PAREN);
+					Consume(data, TokenType::DOT);
+					Consume(data, TokenType::DOT);
+					Consume(data, TokenType::LEFT_PAREN);
+					Token identifier = ConsumeCurrent(data, TokenType::IDENTIFIER);
+					Consume(data, TokenType::RIGHT_PAREN);
 					return GenerateSizeofIdentifierExpressionNode(identifier);
 				}
 
-				return GenerateSizeofExpressionNode(ParseUnaryExpression());
+				return GenerateSizeofExpressionNode(ParseUnaryExpression(data));
 			}
 
-			AstNode* alignmentExpression = ParseAlignmentExpression();
+			AstNode* alignmentExpression = ParseAlignmentExpression(data);
 			if (alignmentExpression->success)
 			{
 				return alignmentExpression;
 			}
 			FreeNode(alignmentExpression);
-			BacktrackTo(backtrackCursor);
+			BacktrackTo(data, backtrackCursor);
 
-			AstNode* noexceptExpr = ParseNoexceptExpression();
+			AstNode* noexceptExpr = ParseNoexceptExpression(data);
 			if (noexceptExpr->success)
 			{
 				return noexceptExpr;
 			}
 			FreeNode(noexceptExpr);
-			BacktrackTo(backtrackCursor);
+			BacktrackTo(data, backtrackCursor);
 
-			AstNode* newExpr = ParseNewExpression();
+			AstNode* newExpr = ParseNewExpression(data);
 			if (newExpr->success)
 			{
 				return newExpr;
 			}
 			FreeNode(newExpr);
-			BacktrackTo(backtrackCursor);
+			BacktrackTo(data, backtrackCursor);
 
-			AstNode* deleteExpr = ParseDeleteExpression();
+			AstNode* deleteExpr = ParseDeleteExpression(data);
 			if (deleteExpr->success)
 			{
 				return deleteExpr;
 			}
 			FreeNode(deleteExpr);
-			BacktrackTo(backtrackCursor);
+			BacktrackTo(data, backtrackCursor);
 
 			return GenerateNoSuccessAstNode();
 		}
 
 		// New Expressions
-		static AstNode* ParseNewExpression()
+		static AstNode* ParseNewExpression(ParserData& data)
 		{
-			int backtrackPosition = CurrentToken;
-			if (Match(TokenType::COLON))
+			int backtrackPosition = data.CurrentToken;
+			if (Match(data, TokenType::COLON))
 			{
-				Consume(TokenType::COLON);
+				Consume(data, TokenType::COLON);
 			}
 
-			if (Match(TokenType::KW_NEW))
+			if (Match(data, TokenType::KW_NEW))
 			{
 				// Optional
-				AstNode* newPlacement = ParseNewPlacement();
-				if (Match(TokenType::LEFT_PAREN))
+				AstNode* newPlacement = ParseNewPlacement(data);
+				if (Match(data, TokenType::LEFT_PAREN))
 				{
-					AstNode* typeId = ParseTypeId();
-					Consume(TokenType::RIGHT_PAREN);
+					AstNode* typeId = ParseTypeId(data);
+					Consume(data, TokenType::RIGHT_PAREN);
 
 					// Optional
-					AstNode* newInitializer = ParseNewInitializer();
+					AstNode* newInitializer = ParseNewInitializer(data);
 					return GenerateNewExpressionNode(newPlacement, typeId, newInitializer);
 				}
 
-				AstNode* newTypeId = ParseNewTypeId();
+				AstNode* newTypeId = ParseNewTypeId(data);
 				if (!newTypeId->success)
 				{
 					FreeNode(newPlacement);
 					FreeNode(newTypeId);
-					BacktrackTo(backtrackPosition);
+					BacktrackTo(data, backtrackPosition);
 					return GenerateNoSuccessAstNode();
 				}
 
 				// Optional
-				AstNode* newInitializer = ParseNewInitializer();
+				AstNode* newInitializer = ParseNewInitializer(data);
 				return GenerateNewTypeIdExpressionNode(newPlacement, newTypeId, newInitializer);
 			}
 
-			BacktrackTo(backtrackPosition);
+			BacktrackTo(data, backtrackPosition);
 			return GenerateNoSuccessAstNode();
 		}
 
-		static AstNode* ParseNewPlacement()
+		static AstNode* ParseNewPlacement(ParserData& data)
 		{
-			int backtrackPosition = CurrentToken;
-			if (Match(TokenType::LEFT_PAREN))
+			int backtrackPosition = data.CurrentToken;
+			if (Match(data, TokenType::LEFT_PAREN))
 			{
-				AstNode* expressionList = ParseExpressionList();
+				AstNode* expressionList = ParseExpressionList(data);
 				if (!expressionList->success)
 				{
 					FreeNode(expressionList);
-					BacktrackTo(backtrackPosition);
+					BacktrackTo(data, backtrackPosition);
 					return GenerateNoSuccessAstNode();
 				}
-				Consume(TokenType::RIGHT_PAREN);
+				Consume(data, TokenType::RIGHT_PAREN);
 
 				return GenerateNewPlacementNode(expressionList);
 			}
@@ -4186,80 +4233,80 @@ namespace CppParser
 			return GenerateNoSuccessAstNode();
 		}
 
-		static AstNode* ParseNewTypeId()
+		static AstNode* ParseNewTypeId(ParserData& data)
 		{
-			int backtrackPosition = CurrentToken;
-			AstNode* typeSpecifierSeq = ParseTypeSpecifierSequence();
+			int backtrackPosition = data.CurrentToken;
+			AstNode* typeSpecifierSeq = ParseTypeSpecifierSequence(data);
 			if (!typeSpecifierSeq->success)
 			{
 				FreeNode(typeSpecifierSeq);
-				BacktrackTo(backtrackPosition);
+				BacktrackTo(data, backtrackPosition);
 				return GenerateNoSuccessAstNode();
 			}
 
 			// Optional
-			AstNode* newDeclarator = ParseNewDeclarator();
+			AstNode* newDeclarator = ParseNewDeclarator(data);
 			return GenerateNewTypeIdNode(typeSpecifierSeq, newDeclarator);
 		}
 
-		static AstNode* ParseNewDeclarator()
+		static AstNode* ParseNewDeclarator(ParserData& data)
 		{
-			int backtrackPosition = CurrentToken;
-			AstNode* noptrNewDeclarator = ParseNoptrNewDeclarator();
+			int backtrackPosition = data.CurrentToken;
+			AstNode* noptrNewDeclarator = ParseNoptrNewDeclarator(data);
 			if (noptrNewDeclarator->success)
 			{
 				return noptrNewDeclarator;
 			}
 			FreeNode(noptrNewDeclarator);
-			BacktrackTo(backtrackPosition);
+			BacktrackTo(data, backtrackPosition);
 
-			AstNode* ptrOperator = ParsePtrOperator();
+			AstNode* ptrOperator = ParsePtrOperator(data);
 			if (!ptrOperator->success)
 			{
 				FreeNode(ptrOperator);
-				BacktrackTo(backtrackPosition);
+				BacktrackTo(data, backtrackPosition);
 				return GenerateNoSuccessAstNode();
 			}
 
 			// Optional
-			AstNode* newDeclarator = ParseNewDeclarator();
+			AstNode* newDeclarator = ParseNewDeclarator(data);
 			return GenerateNewDeclaratorNode(ptrOperator, newDeclarator);
 		}
 
-		static AstNode* ParseNoptrNewDeclarator()
+		static AstNode* ParseNoptrNewDeclarator(ParserData& data)
 		{
 			// TODO: this recursion is crazy
-			int backtrackPosition = CurrentToken;
-			if (!Match(TokenType::LEFT_BRACKET))
+			int backtrackPosition = data.CurrentToken;
+			if (!Match(data, TokenType::LEFT_BRACKET))
 			{
 				return GenerateNoSuccessAstNode();
 			}
 
-			AstNode* expression = ParseExpression();
+			AstNode* expression = ParseExpression(data);
 			if (expression->success)
 			{
-				Consume(TokenType::RIGHT_BRACKET);
+				Consume(data, TokenType::RIGHT_BRACKET);
 
 				// Optional
-				AstNode* attributeSpecifierSeq = ParseAttributeSpecifierSequence();
+				AstNode* attributeSpecifierSeq = ParseAttributeSpecifierSequence(data);
 				return GenerateNoptrNewTailDeclaratorNode(expression, attributeSpecifierSeq);
 			}
 			FreeNode(expression);
-			BacktrackTo(backtrackPosition);
+			BacktrackTo(data, backtrackPosition);
 
-			Consume(TokenType::LEFT_BRACKET);
-			AstNode* constantExpression = ParseConstantExpression();
+			Consume(data, TokenType::LEFT_BRACKET);
+			AstNode* constantExpression = ParseConstantExpression(data);
 			if (constantExpression->success)
 			{
-				Consume(TokenType::RIGHT_BRACKET);
+				Consume(data, TokenType::RIGHT_BRACKET);
 				// Optional
-				AstNode* attributeSpecifierSeq = ParseAttributeSpecifierSequence();
+				AstNode* attributeSpecifierSeq = ParseAttributeSpecifierSequence(data);
 
-				AstNode* noptrNewDeclarator = ParseNoptrNewDeclarator();
+				AstNode* noptrNewDeclarator = ParseNoptrNewDeclarator(data);
 				if (!noptrNewDeclarator->success)
 				{
 					FreeNode(noptrNewDeclarator);
-					BacktrackTo(backtrackPosition);
+					BacktrackTo(data, backtrackPosition);
 					return GenerateNoSuccessAstNode();
 				}
 
@@ -4267,55 +4314,55 @@ namespace CppParser
 			}
 
 			FreeNode(constantExpression);
-			BacktrackTo(backtrackPosition);
+			BacktrackTo(data, backtrackPosition);
 			return GenerateNoSuccessAstNode();
 		}
 
-		static AstNode* ParseNewInitializer()
+		static AstNode* ParseNewInitializer(ParserData& data)
 		{
-			if (Match(TokenType::LEFT_PAREN))
+			if (Match(data, TokenType::LEFT_PAREN))
 			{
 				// Optional
-				AstNode* expressionList = ParseExpressionList();
-				Consume(TokenType::RIGHT_PAREN);
+				AstNode* expressionList = ParseExpressionList(data);
+				Consume(data, TokenType::RIGHT_PAREN);
 
 				return GenerateNewInitializerNode(expressionList);
 			}
 
-			return ParseBracedInitList();
+			return ParseBracedInitList(data);
 		}
 
 		// Delete
-		static AstNode* ParseDeleteExpression()
+		static AstNode* ParseDeleteExpression(ParserData& data)
 		{
-			if (Match(TokenType::COLON))
+			if (Match(data, TokenType::COLON))
 			{
-				Consume(TokenType::COLON);
+				Consume(data, TokenType::COLON);
 			}
 
-			if (Match(TokenType::KW_DELETE))
+			if (Match(data, TokenType::KW_DELETE))
 			{
 				bool deleteArr = false;
-				if (Match(TokenType::LEFT_BRACKET))
+				if (Match(data, TokenType::LEFT_BRACKET))
 				{
-					Consume(TokenType::RIGHT_BRACKET);
+					Consume(data, TokenType::RIGHT_BRACKET);
 					deleteArr = true;
 				}
 
-				return GenerateDeleteNode(ParseCastExpression(), deleteArr);
+				return GenerateDeleteNode(ParseCastExpression(data), deleteArr);
 			}
 
 			return GenerateNoSuccessAstNode();
 		}
 
 		// Noexcept
-		static AstNode* ParseNoexceptExpression()
+		static AstNode* ParseNoexceptExpression(ParserData& data)
 		{
-			if (Match(TokenType::KW_NOEXCEPT))
+			if (Match(data, TokenType::KW_NOEXCEPT))
 			{
-				Consume(TokenType::LEFT_PAREN);
-				AstNode* expression = ParseExpression();
-				Consume(TokenType::RIGHT_PAREN);
+				Consume(data, TokenType::LEFT_PAREN);
+				AstNode* expression = ParseExpression(data);
+				Consume(data, TokenType::RIGHT_PAREN);
 				return expression;
 			}
 
@@ -4323,27 +4370,27 @@ namespace CppParser
 		}
 
 		// Cast
-		static AstNode* ParseCastExpression()
+		static AstNode* ParseCastExpression(ParserData& data)
 		{
-			if (Match(TokenType::LEFT_PAREN))
+			if (Match(data, TokenType::LEFT_PAREN))
 			{
-				AstNode* typeId = ParseTypeId();
-				Consume(TokenType::RIGHT_PAREN);
-				return GenerateCastExpressionNode(typeId, ParseCastExpression());
+				AstNode* typeId = ParseTypeId(data);
+				Consume(data, TokenType::RIGHT_PAREN);
+				return GenerateCastExpressionNode(typeId, ParseCastExpression(data));
 			}
 
-			return ParseUnaryExpression();
+			return ParseUnaryExpression(data);
 		}
 
 		// PointerToMember Expression
-		static AstNode* ParsePmExpression()
+		static AstNode* ParsePmExpression(ParserData& data)
 		{
-			AstNode* result = ParseCastExpression();
+			AstNode* result = ParseCastExpression(data);
 
 			// TODO: Does it matter that I'm doing left recursion and he does right recursion????
-			while (Match(TokenType::POINTER_TO_MEMBER))
+			while (Match(data, TokenType::POINTER_TO_MEMBER))
 			{
-				AstNode* left = ParsePmExpression();
+				AstNode* left = ParsePmExpression(data);
 				result = GeneratePointerToMemberNode(left, result);
 			}
 
@@ -4351,42 +4398,42 @@ namespace CppParser
 		}
 
 		// Primary operations
-		static AstNode* ParseMultiplicativeExpression()
+		static AstNode* ParseMultiplicativeExpression(ParserData& data)
 		{
-			AstNode* result = ParsePmExpression();
+			AstNode* result = ParsePmExpression(data);
 
-			while (Peek() == TokenType::STAR || Peek() == TokenType::DIV || Peek() == TokenType::MODULO)
+			while (Peek(data) == TokenType::STAR || Peek(data) == TokenType::DIV || Peek(data) == TokenType::MODULO)
 			{
-				OverloadableOperatorType op = ParseOverloadableOperator();
-				AstNode* right = ParseMultiplicativeExpression();
+				OverloadableOperatorType op = ParseOverloadableOperator(data);
+				AstNode* right = ParseMultiplicativeExpression(data);
 				result = GenerateBinaryExpressionNode(result, op, right);
 			}
 
 			return result;
 		}
 
-		static AstNode* ParseAdditiveExpression()
+		static AstNode* ParseAdditiveExpression(ParserData& data)
 		{
-			AstNode* result = ParseMultiplicativeExpression();
+			AstNode* result = ParseMultiplicativeExpression(data);
 
-			while (Peek() == TokenType::PLUS || Peek() == TokenType::MINUS)
+			while (Peek(data) == TokenType::PLUS || Peek(data) == TokenType::MINUS)
 			{
-				OverloadableOperatorType op = ParseOverloadableOperator();
-				AstNode* right = ParseAdditiveExpression();
+				OverloadableOperatorType op = ParseOverloadableOperator(data);
+				AstNode* right = ParseAdditiveExpression(data);
 				result = GenerateBinaryExpressionNode(result, op, right);
 			}
 
 			return result;
 		}
 
-		static AstNode* ParseShiftExpression()
+		static AstNode* ParseShiftExpression(ParserData& data)
 		{
-			AstNode* result = ParseAdditiveExpression();
+			AstNode* result = ParseAdditiveExpression(data);
 
-			while (Peek() == TokenType::LEFT_SHIFT || Peek() == TokenType::RIGHT_SHIFT)
+			while (Peek(data) == TokenType::LEFT_SHIFT || Peek(data) == TokenType::RIGHT_SHIFT)
 			{
-				OverloadableOperatorType op = ParseOverloadableOperator();
-				AstNode* right = ParseShiftExpression();
+				OverloadableOperatorType op = ParseOverloadableOperator(data);
+				AstNode* right = ParseShiftExpression(data);
 				result = GenerateBinaryExpressionNode(result, op, right);
 			}
 
@@ -4394,28 +4441,28 @@ namespace CppParser
 		}
 
 		// Comparision operations
-		static AstNode* ParseRelationalExpression()
+		static AstNode* ParseRelationalExpression(ParserData& data)
 		{
-			AstNode* result = ParseShiftExpression();
+			AstNode* result = ParseShiftExpression(data);
 
-			while (Peek() == TokenType::LEFT_ANGLE_BRACKET || Peek() == TokenType::RIGHT_ANGLE_BRACKET || Peek() == TokenType::LESS_THAN_EQ || Peek() == TokenType::GREATER_THAN_EQ)
+			while (Peek(data) == TokenType::LEFT_ANGLE_BRACKET || Peek(data) == TokenType::RIGHT_ANGLE_BRACKET || Peek(data) == TokenType::LESS_THAN_EQ || Peek(data) == TokenType::GREATER_THAN_EQ)
 			{
-				OverloadableOperatorType op = ParseOverloadableOperator();
-				AstNode* right = ParseRelationalExpression();
+				OverloadableOperatorType op = ParseOverloadableOperator(data);
+				AstNode* right = ParseRelationalExpression(data);
 				result = GenerateBinaryExpressionNode(result, op, right);
 			}
 
 			return result;
 		}
 
-		static AstNode* ParseEqualityExpression()
+		static AstNode* ParseEqualityExpression(ParserData& data)
 		{
-			AstNode* result = ParseRelationalExpression();
+			AstNode* result = ParseRelationalExpression(data);
 
-			while (Peek() == TokenType::EQUAL_EQUAL || Peek() == TokenType::BANG_EQUAL)
+			while (Peek(data) == TokenType::EQUAL_EQUAL || Peek(data) == TokenType::BANG_EQUAL)
 			{
-				OverloadableOperatorType op = ParseOverloadableOperator();
-				AstNode* right = ParseEqualityExpression();
+				OverloadableOperatorType op = ParseOverloadableOperator(data);
+				AstNode* right = ParseEqualityExpression(data);
 				result = GenerateBinaryExpressionNode(result, op, right);
 			}
 
@@ -4423,70 +4470,70 @@ namespace CppParser
 		}
 
 		// Logical operations
-		static AstNode* ParseAndExpression()
+		static AstNode* ParseAndExpression(ParserData& data)
 		{
-			AstNode* result = ParseEqualityExpression();
+			AstNode* result = ParseEqualityExpression(data);
 
-			while (Peek() == TokenType::AND)
+			while (Peek(data) == TokenType::AND)
 			{
-				OverloadableOperatorType op = ParseOverloadableOperator();
-				AstNode* right = ParseAndExpression();
+				OverloadableOperatorType op = ParseOverloadableOperator(data);
+				AstNode* right = ParseAndExpression(data);
 				result = GenerateBinaryExpressionNode(result, op, right);
 			}
 
 			return result;
 		}
 
-		static AstNode* ParseExclusiveOrExpression()
+		static AstNode* ParseExclusiveOrExpression(ParserData& data)
 		{
-			AstNode* result = ParseAndExpression();
+			AstNode* result = ParseAndExpression(data);
 
-			while (Peek() == TokenType::CARET)
+			while (Peek(data) == TokenType::CARET)
 			{
-				OverloadableOperatorType op = ParseOverloadableOperator();
-				AstNode* right = ParseExclusiveOrExpression();
+				OverloadableOperatorType op = ParseOverloadableOperator(data);
+				AstNode* right = ParseExclusiveOrExpression(data);
 				result = GenerateBinaryExpressionNode(result, op, right);
 			}
 
 			return result;
 		}
 
-		static AstNode* ParseInclusiveOrExpression()
+		static AstNode* ParseInclusiveOrExpression(ParserData& data)
 		{
-			AstNode* result = ParseExclusiveOrExpression();
+			AstNode* result = ParseExclusiveOrExpression(data);
 
-			while (Peek() == TokenType::PIPE)
+			while (Peek(data) == TokenType::PIPE)
 			{
-				OverloadableOperatorType op = ParseOverloadableOperator();
-				AstNode* right = ParseInclusiveOrExpression();
+				OverloadableOperatorType op = ParseOverloadableOperator(data);
+				AstNode* right = ParseInclusiveOrExpression(data);
 				result = GenerateBinaryExpressionNode(result, op, right);
 			}
 
 			return result;
 		}
 
-		static AstNode* ParseLogicalAndExpression()
+		static AstNode* ParseLogicalAndExpression(ParserData& data)
 		{
-			AstNode* result = ParseInclusiveOrExpression();
+			AstNode* result = ParseInclusiveOrExpression(data);
 
-			while (Peek() == TokenType::LOGICAL_AND)
+			while (Peek(data) == TokenType::LOGICAL_AND)
 			{
-				OverloadableOperatorType op = ParseOverloadableOperator();
-				AstNode* right = ParseLogicalAndExpression();
+				OverloadableOperatorType op = ParseOverloadableOperator(data);
+				AstNode* right = ParseLogicalAndExpression(data);
 				result = GenerateBinaryExpressionNode(result, op, right);
 			}
 
 			return result;
 		}
 
-		static AstNode* ParseLogicalOrExpression()
+		static AstNode* ParseLogicalOrExpression(ParserData& data)
 		{
-			AstNode* result = ParseLogicalAndExpression();
+			AstNode* result = ParseLogicalAndExpression(data);
 
-			while (Peek() == TokenType::LOGICAL_OR)
+			while (Peek(data) == TokenType::LOGICAL_OR)
 			{
-				OverloadableOperatorType op = ParseOverloadableOperator();
-				AstNode* right = ParseLogicalOrExpression();
+				OverloadableOperatorType op = ParseOverloadableOperator(data);
+				AstNode* right = ParseLogicalOrExpression(data);
 				result = GenerateBinaryExpressionNode(result, op, right);
 			}
 
@@ -4494,38 +4541,38 @@ namespace CppParser
 		}
 
 		// Misc expressions
-		static AstNode* ParseConditionalExpression()
+		static AstNode* ParseConditionalExpression(ParserData& data)
 		{
-			AstNode* result = ParseLogicalOrExpression();
+			AstNode* result = ParseLogicalOrExpression(data);
 
-			if (Match(TokenType::QUESTION))
+			if (Match(data, TokenType::QUESTION))
 			{
-				AstNode* ifTrueNode = ParseExpression();
-				Consume(TokenType::SEMICOLON);
-				AstNode* ifFalseNode = ParseAssignmentExpression();
+				AstNode* ifTrueNode = ParseExpression(data);
+				Consume(data, TokenType::SEMICOLON);
+				AstNode* ifFalseNode = ParseAssignmentExpression(data);
 				result = GenerateTernaryExpressionNode(result, ifTrueNode, ifFalseNode);
 			}
 
 			return result;
 		}
 
-		static AstNode* ParseAssignmentExpression()
+		static AstNode* ParseAssignmentExpression(ParserData& data)
 		{
-			int backtrackPosition = CurrentToken;
-			AstNode* result = ParseConditionalExpression();
+			int backtrackPosition = data.CurrentToken;
+			AstNode* result = ParseConditionalExpression(data);
 
 			if (result->success)
 			{
 				return result;
 			}
 			FreeNode(result);
-			BacktrackTo(backtrackPosition);
+			BacktrackTo(data, backtrackPosition);
 
-			result = ParseLogicalOrExpression();
-			if (IsAssignmentOperator(Peek()))
+			result = ParseLogicalOrExpression(data);
+			if (IsAssignmentOperator(Peek(data)))
 			{
 				AssignmentOperatorType assignmentType = AssignmentOperatorType::None;
-				switch (Peek())
+				switch (Peek(data))
 				{
 				case TokenType::EQUAL:
 					assignmentType = AssignmentOperatorType::Equal;
@@ -4561,334 +4608,334 @@ namespace CppParser
 					assignmentType = AssignmentOperatorType::OrEqual;
 					break;
 				}
-				result = GenerateAssignmentExpressionNode(result, assignmentType, ParseInitializerClause());
+				result = GenerateAssignmentExpressionNode(result, assignmentType, ParseInitializerClause(data));
 				return result;
 			}
 			FreeNode(result);
-			BacktrackTo(backtrackPosition);
+			BacktrackTo(data, backtrackPosition);
 
-			return ParseThrowExpression();
+			return ParseThrowExpression(data);
 		}
 
-		static AstNode* ParseAlignmentExpression()
+		static AstNode* ParseAlignmentExpression(ParserData& data)
 		{
-			int backtrackPosition = CurrentToken;
-			if (Peek() == TokenType::KW_ALIGN_OF)
+			int backtrackPosition = data.CurrentToken;
+			if (Peek(data) == TokenType::KW_ALIGN_OF)
 			{
-				Consume(TokenType::LEFT_PAREN);
-				AstNode* typeId = ParseTypeId();
+				Consume(data, TokenType::LEFT_PAREN);
+				AstNode* typeId = ParseTypeId(data);
 				if (typeId->success)
 				{
-					Consume(TokenType::RIGHT_PAREN);
+					Consume(data, TokenType::RIGHT_PAREN);
 					return GenerateAlignmentExpressionNode(typeId);
 				}
 				FreeNode(typeId);
-				BacktrackTo(backtrackPosition);
+				BacktrackTo(data, backtrackPosition);
 			}
 
 			return GenerateNoSuccessAstNode();
 		}
 
-		static AstNode* ParseExpression()
+		static AstNode* ParseExpression(ParserData& data)
 		{
-			AstNode* expression = ParseAssignmentExpression();
+			AstNode* expression = ParseAssignmentExpression(data);
 
-			while (Match(TokenType::COMMA))
+			while (Match(data, TokenType::COMMA))
 			{
 				AstNode* nextExpression = expression;
 				AstNode* expression = GenerateAstNode(AstNodeType::Expression);
-				expression->expressionNode.expression = ParseExpression();
+				expression->expressionNode.expression = ParseExpression(data);
 				expression->expressionNode.nextExpression = nextExpression;
 			}
 
 			return expression;
 		}
 
-		static AstNode* ParseConstantExpression()
+		static AstNode* ParseConstantExpression(ParserData& data)
 		{
-			return GenerateConstantExpressionNode(ParseConditionalExpression());
+			return GenerateConstantExpressionNode(ParseConditionalExpression(data));
 		}
 
 		// Statements
-		static AstNode* ParseStatement()
+		static AstNode* ParseStatement(ParserData& data)
 		{
-			int backtrackPosition = CurrentToken;
-			AstNode* labeledStatement = ParseLabeledStatement();
+			int backtrackPosition = data.CurrentToken;
+			AstNode* labeledStatement = ParseLabeledStatement(data);
 			if (labeledStatement->success)
 			{
 				return GenerateStatementNode(GenerateNoSuccessAstNode(), labeledStatement);
 			}
 			FreeNode(labeledStatement);
-			BacktrackTo(backtrackPosition);
+			BacktrackTo(data, backtrackPosition);
 
-			AstNode* declarationStatement = ParseDeclarationStatement();
+			AstNode* declarationStatement = ParseDeclarationStatement(data);
 			if (declarationStatement->success)
 			{
 				return GenerateStatementNode(GenerateNoSuccessAstNode(), declarationStatement);
 			}
 			FreeNode(declarationStatement);
-			BacktrackTo(backtrackPosition);
+			BacktrackTo(data, backtrackPosition);
 
 			// This is optional
-			AstNode* attributeSpecifierSeq = ParseAttributeSpecifierSequence();
-			int backtrackPosition2 = CurrentToken;
+			AstNode* attributeSpecifierSeq = ParseAttributeSpecifierSequence(data);
+			int backtrackPosition2 = data.CurrentToken;
 
-			AstNode* expressionStatement = ParseExpressionStatement();
+			AstNode* expressionStatement = ParseExpressionStatement(data);
 			if (expressionStatement->success)
 			{
 				return GenerateStatementNode(attributeSpecifierSeq, expressionStatement);
 			}
 			FreeNode(expressionStatement);
-			BacktrackTo(backtrackPosition2);
+			BacktrackTo(data, backtrackPosition2);
 
-			AstNode* compoundStatement = ParseCompoundStatement();
+			AstNode* compoundStatement = ParseCompoundStatement(data);
 			if (compoundStatement->success)
 			{
 				return GenerateStatementNode(attributeSpecifierSeq, compoundStatement);
 			}
 			FreeNode(compoundStatement);
-			BacktrackTo(backtrackPosition2);
+			BacktrackTo(data, backtrackPosition2);
 
-			AstNode* selectionStatement = ParseSelectionStatement();
+			AstNode* selectionStatement = ParseSelectionStatement(data);
 			if (selectionStatement->success)
 			{
 				return GenerateStatementNode(attributeSpecifierSeq, selectionStatement);
 			}
 			FreeNode(selectionStatement);
-			BacktrackTo(backtrackPosition2);
+			BacktrackTo(data, backtrackPosition2);
 
-			AstNode* iterationStatement = ParseIterationStatement();
+			AstNode* iterationStatement = ParseIterationStatement(data);
 			if (iterationStatement->success)
 			{
 				return GenerateStatementNode(attributeSpecifierSeq, iterationStatement);
 			}
 			FreeNode(iterationStatement);
-			BacktrackTo(backtrackPosition2);
+			BacktrackTo(data, backtrackPosition2);
 
-			AstNode* jumpStatement = ParseJumpStatement();
+			AstNode* jumpStatement = ParseJumpStatement(data);
 			if (jumpStatement->success)
 			{
 				return GenerateStatementNode(attributeSpecifierSeq, jumpStatement);
 			}
 			FreeNode(jumpStatement);
-			BacktrackTo(backtrackPosition2);
+			BacktrackTo(data, backtrackPosition2);
 
-			AstNode* tryBlock = ParseTryBlock();
+			AstNode* tryBlock = ParseTryBlock(data);
 			if (tryBlock->success)
 			{
 				return GenerateStatementNode(attributeSpecifierSeq, tryBlock);
 			}
 			FreeNode(tryBlock);
 			FreeNode(attributeSpecifierSeq);
-			BacktrackTo(backtrackPosition);
+			BacktrackTo(data, backtrackPosition);
 
 			return GenerateNoSuccessAstNode();
 		}
 
-		static AstNode* ParseLabeledStatement()
+		static AstNode* ParseLabeledStatement(ParserData& data)
 		{
-			int backtrackPosition = CurrentToken;
+			int backtrackPosition = data.CurrentToken;
 			// This is optional
-			AstNode* attributeSpecifierSeq = ParseAttributeSpecifierSequence();
+			AstNode* attributeSpecifierSeq = ParseAttributeSpecifierSequence(data);
 
-			if (Peek() == TokenType::IDENTIFIER)
+			if (Peek(data) == TokenType::IDENTIFIER)
 			{
-				Token identifier = ConsumeCurrent(TokenType::IDENTIFIER);
-				Consume(TokenType::COLON);
-				AstNode* statement = ParseStatement();
+				Token identifier = ConsumeCurrent(data, TokenType::IDENTIFIER);
+				Consume(data, TokenType::COLON);
+				AstNode* statement = ParseStatement(data);
 				return GenerateLabeledIdentifierNode(attributeSpecifierSeq, identifier, statement);
 			}
 
-			if (Match(TokenType::KW_CASE))
+			if (Match(data, TokenType::KW_CASE))
 			{
-				AstNode* constantExpression = ParseConstantExpression();
-				Consume(TokenType::COLON);
-				AstNode* statement = ParseStatement();
+				AstNode* constantExpression = ParseConstantExpression(data);
+				Consume(data, TokenType::COLON);
+				AstNode* statement = ParseStatement(data);
 				return GenerateCaseLabelNode(attributeSpecifierSeq, constantExpression, statement);
 			}
 
-			if (Match(TokenType::KW_DEFAULT))
+			if (Match(data, TokenType::KW_DEFAULT))
 			{
-				Consume(TokenType::COLON);
-				AstNode* statement = ParseStatement();
+				Consume(data, TokenType::COLON);
+				AstNode* statement = ParseStatement(data);
 				return GenerateDefaultLabelNode(attributeSpecifierSeq, statement);
 			}
 
 			FreeNode(attributeSpecifierSeq);
-			BacktrackTo(backtrackPosition);
+			BacktrackTo(data, backtrackPosition);
 			return GenerateNoSuccessAstNode();
 		}
 
-		static AstNode* ParseExpressionStatement()
+		static AstNode* ParseExpressionStatement(ParserData& data)
 		{
-			if (Match(TokenType::SEMICOLON))
+			if (Match(data, TokenType::SEMICOLON))
 			{
 				return GenerateEmptyStatementNode();
 			}
 
-			int backtrackPosition = CurrentToken;
-			AstNode* expression = ParseExpression();
+			int backtrackPosition = data.CurrentToken;
+			AstNode* expression = ParseExpression(data);
 			if (expression->success)
 			{
-				Consume(TokenType::SEMICOLON);
+				Consume(data, TokenType::SEMICOLON);
 				return expression;
 			}
 
 			FreeNode(expression);
-			BacktrackTo(backtrackPosition);
+			BacktrackTo(data, backtrackPosition);
 			return GenerateNoSuccessAstNode();
 		}
 
-		static AstNode* ParseCompoundStatement()
+		static AstNode* ParseCompoundStatement(ParserData& data)
 		{
-			if (Match(TokenType::LEFT_CURLY_BRACKET))
+			if (Match(data, TokenType::LEFT_CURLY_BRACKET))
 			{
 				// Optional
-				AstNode* statementSequence = ParseStatementSequence();
-				Consume(TokenType::RIGHT_CURLY_BRACKET);
+				AstNode* statementSequence = ParseStatementSequence(data);
+				Consume(data, TokenType::RIGHT_CURLY_BRACKET);
 				return GenerateCompoundStatementNode(statementSequence);
 			}
 
 			return GenerateNoSuccessAstNode();
 		}
 
-		static AstNode* ParseStatementSequence()
+		static AstNode* ParseStatementSequence(ParserData& data)
 		{
-			int backtrackPosition = CurrentToken;
-			AstNode* result = ParseStatement();
+			int backtrackPosition = data.CurrentToken;
+			AstNode* result = ParseStatement(data);
 			if (!result->success)
 			{
 				FreeNode(result);
-				BacktrackTo(backtrackPosition);
+				BacktrackTo(data, backtrackPosition);
 				return GenerateNoSuccessAstNode();
 			}
 
 			AstNode* nextStatement = nullptr;
 			do
 			{
-				backtrackPosition = CurrentToken;
-				AstNode* nextStatement = ParseStatement();
+				backtrackPosition = data.CurrentToken;
+				AstNode* nextStatement = ParseStatement(data);
 				result = GenerateStatementSequenceNode(result, nextStatement->success ? nextStatement : GenerateNoSuccessAstNode());
 			} while (nextStatement && nextStatement->success);
 
 			Logger::Assert(nextStatement != nullptr, "Something went horribly wrong when parsing a statement sequence.");
 			FreeNode(nextStatement);
-			BacktrackTo(backtrackPosition);
+			BacktrackTo(data, backtrackPosition);
 			return result;
 		}
 
 		// Selection statements
-		static AstNode* ParseSelectionStatement()
+		static AstNode* ParseSelectionStatement(ParserData& data)
 		{
-			if (Match(TokenType::KW_IF))
+			if (Match(data, TokenType::KW_IF))
 			{
-				Consume(TokenType::LEFT_PAREN);
-				AstNode* condition = ParseCondition();
-				Consume(TokenType::RIGHT_PAREN);
+				Consume(data, TokenType::LEFT_PAREN);
+				AstNode* condition = ParseCondition(data);
+				Consume(data, TokenType::RIGHT_PAREN);
 
-				AstNode* ifStatement = ParseStatement();
-				AstNode* elseStatement = Match(TokenType::KW_ELSE) ?
-					ParseStatement() :
+				AstNode* ifStatement = ParseStatement(data);
+				AstNode* elseStatement = Match(data, TokenType::KW_ELSE) ?
+					ParseStatement(data) :
 					GenerateNoSuccessAstNode();
 
 				return GenerateIfElseNode(condition, ifStatement, elseStatement);
 			}
 
-			if (Match(TokenType::KW_SWITCH))
+			if (Match(data, TokenType::KW_SWITCH))
 			{
-				Consume(TokenType::LEFT_PAREN);
-				AstNode* condition = ParseCondition();
-				Consume(TokenType::RIGHT_PAREN);
+				Consume(data, TokenType::LEFT_PAREN);
+				AstNode* condition = ParseCondition(data);
+				Consume(data, TokenType::RIGHT_PAREN);
 
-				AstNode* statement = ParseStatement();
+				AstNode* statement = ParseStatement(data);
 				return GenerateSwitchNode(condition, statement);
 			}
 
 			return GenerateNoSuccessAstNode();
 		}
 
-		static AstNode* ParseCondition()
+		static AstNode* ParseCondition(ParserData& data)
 		{
-			int backtrackPosition = CurrentToken;
-			AstNode* expression = ParseExpression();
+			int backtrackPosition = data.CurrentToken;
+			AstNode* expression = ParseExpression(data);
 			if (expression->success)
 			{
 				return expression;
 			}
-			BacktrackTo(backtrackPosition);
+			BacktrackTo(data, backtrackPosition);
 			FreeNode(expression);
 
-			AstNode* attributeSpecifierSeq = ParseAttributeSpecifierSequence();
-			AstNode* declSpecifierSeq = ParseDeclarationSpecifierSequence();
+			AstNode* attributeSpecifierSeq = ParseAttributeSpecifierSequence(data);
+			AstNode* declSpecifierSeq = ParseDeclarationSpecifierSequence(data);
 			if (!declSpecifierSeq->success)
 			{
-				BacktrackTo(backtrackPosition);
+				BacktrackTo(data, backtrackPosition);
 				FreeNode(attributeSpecifierSeq);
 				FreeNode(declSpecifierSeq);
 				return GenerateNoSuccessAstNode();
 			}
 
-			AstNode* declarator = ParseDeclarator();
-			if (Match(TokenType::EQUAL))
+			AstNode* declarator = ParseDeclarator(data);
+			if (Match(data, TokenType::EQUAL))
 			{
-				AstNode* initializerClause = ParseInitializerClause();
+				AstNode* initializerClause = ParseInitializerClause(data);
 				return GenerateInitializerConditionNode(attributeSpecifierSeq, declSpecifierSeq, declarator, initializerClause);
 			}
 
-			AstNode* bracedInitList = ParseBracedInitList();
+			AstNode* bracedInitList = ParseBracedInitList(data);
 			return GenerateBracedInitConditionNode(attributeSpecifierSeq, declSpecifierSeq, declarator, bracedInitList);
 		}
 
 		// Iteration statements
-		static AstNode* ParseIterationStatement()
+		static AstNode* ParseIterationStatement(ParserData& data)
 		{
-			if (Match(TokenType::KW_WHILE))
+			if (Match(data, TokenType::KW_WHILE))
 			{
-				Consume(TokenType::LEFT_PAREN);
-				AstNode* condition = ParseCondition();
-				Consume(TokenType::RIGHT_PAREN);
-				AstNode* statement = ParseStatement();
+				Consume(data, TokenType::LEFT_PAREN);
+				AstNode* condition = ParseCondition(data);
+				Consume(data, TokenType::RIGHT_PAREN);
+				AstNode* statement = ParseStatement(data);
 
 				return GenerateWhileLoopNode(condition, statement);
 			}
 
-			if (Match(TokenType::KW_DO))
+			if (Match(data, TokenType::KW_DO))
 			{
-				AstNode* statement = ParseStatement();
-				Consume(TokenType::KW_WHILE);
-				Consume(TokenType::LEFT_PAREN);
-				AstNode* condition = ParseExpression();
-				Consume(TokenType::RIGHT_PAREN);
-				Consume(TokenType::SEMICOLON);
+				AstNode* statement = ParseStatement(data);
+				Consume(data, TokenType::KW_WHILE);
+				Consume(data, TokenType::LEFT_PAREN);
+				AstNode* condition = ParseExpression(data);
+				Consume(data, TokenType::RIGHT_PAREN);
+				Consume(data, TokenType::SEMICOLON);
 
 				return GenerateDoWhileLoopNode(statement, condition);
 			}
 
-			if (Match(TokenType::KW_FOR))
+			if (Match(data, TokenType::KW_FOR))
 			{
-				Consume(TokenType::LEFT_PAREN);
-				int backtrackPosition = CurrentToken;
-				AstNode* forInitStatement = ParseForInitStatement();
+				Consume(data, TokenType::LEFT_PAREN);
+				int backtrackPosition = data.CurrentToken;
+				AstNode* forInitStatement = ParseForInitStatement(data);
 				if (forInitStatement->success)
 				{
 					// This is optional
-					AstNode* condition = ParseCondition();
-					Consume(TokenType::SEMICOLON);
+					AstNode* condition = ParseCondition(data);
+					Consume(data, TokenType::SEMICOLON);
 					// This is also optional
-					AstNode* expression = ParseExpression();
-					Consume(TokenType::RIGHT_PAREN);
-					AstNode* statement = ParseStatement();
+					AstNode* expression = ParseExpression(data);
+					Consume(data, TokenType::RIGHT_PAREN);
+					AstNode* statement = ParseStatement(data);
 
 					return GenerateForLoopNode(forInitStatement, condition, expression, statement);
 				}
 				FreeNode(forInitStatement);
-				BacktrackTo(backtrackPosition);
+				BacktrackTo(data, backtrackPosition);
 
-				AstNode* forRangeDeclaration = ParseForRangeDeclaration();
-				Consume(TokenType::COLON);
-				AstNode* forRangeInitializer = ParseForRangeInitializer();
-				Consume(TokenType::RIGHT_PAREN);
-				AstNode* statement = ParseStatement();
+				AstNode* forRangeDeclaration = ParseForRangeDeclaration(data);
+				Consume(data, TokenType::COLON);
+				AstNode* forRangeInitializer = ParseForRangeInitializer(data);
+				Consume(data, TokenType::RIGHT_PAREN);
+				AstNode* statement = ParseStatement(data);
 
 				return GenerateForEachLoopNode(forRangeDeclaration, forRangeInitializer, statement);
 			}
@@ -4896,73 +4943,73 @@ namespace CppParser
 			return GenerateNoSuccessAstNode();
 		}
 
-		static AstNode* ParseForInitStatement()
+		static AstNode* ParseForInitStatement(ParserData& data)
 		{
-			int backtrackPostion = CurrentToken;
-			AstNode* expressionStatement = ParseExpressionStatement();
+			int backtrackPosition = data.CurrentToken;
+			AstNode* expressionStatement = ParseExpressionStatement(data);
 			if (expressionStatement->success)
 			{
 				return expressionStatement;
 			}
 			FreeNode(expressionStatement);
-			BacktrackTo(backtrackPostion);
+			BacktrackTo(data, backtrackPosition);
 
-			AstNode* simpleDeclaration = ParseSimpleDeclaration();
+			AstNode* simpleDeclaration = ParseSimpleDeclaration(data);
 			if (simpleDeclaration->success)
 			{
 				return simpleDeclaration;
 			}
 
 			FreeNode(simpleDeclaration);
-			BacktrackTo(backtrackPostion);
+			BacktrackTo(data, backtrackPosition);
 			return GenerateNoSuccessAstNode();
 		}
 
-		static AstNode* ParseForRangeDeclaration()
+		static AstNode* ParseForRangeDeclaration(ParserData& data)
 		{
-			int backtrackPostion = CurrentToken;
+			int backtrackPosition = data.CurrentToken;
 			// This is optional
-			AstNode* attributeSpecifierSeq = ParseAttributeSpecifierSequence();
-			AstNode* typeSpecifierSeq = ParseTypeSpecifierSequence();
+			AstNode* attributeSpecifierSeq = ParseAttributeSpecifierSequence(data);
+			AstNode* typeSpecifierSeq = ParseTypeSpecifierSequence(data);
 			if (!typeSpecifierSeq->success)
 			{
 				FreeNode(attributeSpecifierSeq);
 				FreeNode(typeSpecifierSeq);
-				BacktrackTo(backtrackPostion);
+				BacktrackTo(data, backtrackPosition);
 				return GenerateNoSuccessAstNode();
 			}
 
-			AstNode* declarator = ParseDeclarator();
+			AstNode* declarator = ParseDeclarator(data);
 			if (!declarator->success)
 			{
 				FreeNode(attributeSpecifierSeq);
 				FreeNode(typeSpecifierSeq);
 				FreeNode(declarator);
-				BacktrackTo(backtrackPostion);
+				BacktrackTo(data, backtrackPosition);
 				return GenerateNoSuccessAstNode();
 			}
 
 			return GenerateForRangeDeclarationNode(attributeSpecifierSeq, typeSpecifierSeq, declarator);
 		}
 
-		static AstNode* ParseForRangeInitializer()
+		static AstNode* ParseForRangeInitializer(ParserData& data)
 		{
-			int backtrackPosition = CurrentToken;
-			AstNode* expression = ParseExpression();
+			int backtrackPosition = data.CurrentToken;
+			AstNode* expression = ParseExpression(data);
 			if (!expression->success)
 			{
 				FreeNode(expression);
-				BacktrackTo(backtrackPosition);
+				BacktrackTo(data, backtrackPosition);
 				return GenerateNoSuccessAstNode();
 			}
 
 			// TODO: For each loop seems weird do some good testing on this piece of grammar
-			AstNode* bracedInitList = ParseBracedInitList();
+			AstNode* bracedInitList = ParseBracedInitList(data);
 			if (!bracedInitList->success)
 			{
 				FreeNode(expression);
 				FreeNode(bracedInitList);
-				BacktrackTo(backtrackPosition);
+				BacktrackTo(data, backtrackPosition);
 				return GenerateNoSuccessAstNode();
 			}
 
@@ -4970,53 +5017,53 @@ namespace CppParser
 		}
 
 		// Jump statements
-		static AstNode* ParseJumpStatement()
+		static AstNode* ParseJumpStatement(ParserData& data)
 		{
-			if (Match(TokenType::KW_BREAK))
+			if (Match(data, TokenType::KW_BREAK))
 			{
-				Consume(TokenType::SEMICOLON);
+				Consume(data, TokenType::SEMICOLON);
 				return GenerateBreakNode();
 			}
 
-			if (Match(TokenType::KW_CONTINUE))
+			if (Match(data, TokenType::KW_CONTINUE))
 			{
-				Consume(TokenType::KW_CONTINUE);
+				Consume(data, TokenType::KW_CONTINUE);
 				return GenerateContinueNode();
 			}
 
-			if (Match(TokenType::KW_RETURN))
+			if (Match(data, TokenType::KW_RETURN))
 			{
-				if (Match(TokenType::SEMICOLON))
+				if (Match(data, TokenType::SEMICOLON))
 				{
 					return GenerateReturnNode(GenerateNoSuccessAstNode());
 				}
 
-				int backtrackPosition = CurrentToken;
-				AstNode* expression = ParseExpression();
+				int backtrackPosition = data.CurrentToken;
+				AstNode* expression = ParseExpression(data);
 				if (expression->success)
 				{
-					Consume(TokenType::SEMICOLON);
+					Consume(data, TokenType::SEMICOLON);
 					return GenerateReturnNode(expression);
 				}
 				FreeNode(expression);
-				BacktrackTo(backtrackPosition);
+				BacktrackTo(data, backtrackPosition);
 
-				AstNode* bracedInitList = ParseBracedInitList();
+				AstNode* bracedInitList = ParseBracedInitList(data);
 				if (bracedInitList->success)
 				{
-					Consume(TokenType::SEMICOLON);
+					Consume(data, TokenType::SEMICOLON);
 					return GenerateReturnNode(bracedInitList);
 				}
 				FreeNode(bracedInitList);
-				BacktrackTo(backtrackPosition);
+				BacktrackTo(data, backtrackPosition);
 
 				return GenerateNoSuccessAstNode();
 			}
 
-			if (Match(TokenType::KW_GOTO))
+			if (Match(data, TokenType::KW_GOTO))
 			{
-				Token identifier = ConsumeCurrent(TokenType::IDENTIFIER);
-				Consume(TokenType::SEMICOLON);
+				Token identifier = ConsumeCurrent(data, TokenType::IDENTIFIER);
+				Consume(data, TokenType::SEMICOLON);
 				return GenerateGotoNode(identifier);
 			}
 
@@ -5024,40 +5071,40 @@ namespace CppParser
 		}
 
 		// Declarations
-		static AstNode* ParseDeclarationStatement()
+		static AstNode* ParseDeclarationStatement(ParserData& data)
 		{
-			return ParseBlockDeclaration();
+			return ParseBlockDeclaration(data);
 		}
 
-		static AstNode* ParseDeclarationSequence()
+		static AstNode* ParseDeclarationSequence(ParserData& data)
 		{
-			int backtrackPosition = CurrentToken;
-			AstNode* result = ParseDeclaration();
+			int backtrackPosition = data.CurrentToken;
+			AstNode* result = ParseDeclaration(data);
 			if (!result->success)
 			{
 				FreeNode(result);
-				BacktrackTo(backtrackPosition);
+				BacktrackTo(data, backtrackPosition);
 				return GenerateNoSuccessAstNode();
 			}
 
-			AstNode* nextDeclaration = ParseDeclarationSequence();
+			AstNode* nextDeclaration = ParseDeclarationSequence(data);
 			result = GenerateDeclarationSeqNode(result, nextDeclaration);
 
 			return result;
 		}
 
-		static AstNode* ParseUSystemDeclaration()
+		static AstNode* ParseUSystemDeclaration(ParserData& data)
 		{
-			int backtrackPosition = CurrentToken;
-			if (Match(TokenType::USYSTEM))
+			int backtrackPosition = data.CurrentToken;
+			if (Match(data, TokenType::USYSTEM))
 			{
-				Consume(TokenType::LEFT_PAREN);
-				AstNode* parameterDeclarationClause = ParseParameterDeclarationClause();
+				Consume(data, TokenType::LEFT_PAREN);
+				AstNode* parameterDeclarationClause = ParseParameterDeclarationClause(data);
 				if (parameterDeclarationClause->success)
 				{
-					Consume(TokenType::RIGHT_PAREN);
-					Match(TokenType::SEMICOLON);
-					AstNode* namedNamespaceDefinition = ParseNamedNamespaceDefinition();
+					Consume(data, TokenType::RIGHT_PAREN);
+					Match(data, TokenType::SEMICOLON);
+					AstNode* namedNamespaceDefinition = ParseNamedNamespaceDefinition(data);
 					if (namedNamespaceDefinition->success)
 					{
 						return GenerateUSystemDeclarationNode(parameterDeclarationClause, namedNamespaceDefinition);
@@ -5067,206 +5114,206 @@ namespace CppParser
 				FreeNode(parameterDeclarationClause);
 			}
 
-			BacktrackTo(backtrackPosition);
+			BacktrackTo(data, backtrackPosition);
 			return GenerateNoSuccessAstNode();
 		}
 
-		static AstNode* ParseDeclaration()
+		static AstNode* ParseDeclaration(ParserData& data)
 		{
-			int backtrackPosition = CurrentToken;
-			AstNode* blockDeclaration = ParseBlockDeclaration();
+			int backtrackPosition = data.CurrentToken;
+			AstNode* blockDeclaration = ParseBlockDeclaration(data);
 			if (blockDeclaration->success)
 			{
 				return blockDeclaration;
 			}
 			FreeNode(blockDeclaration);
-			BacktrackTo(backtrackPosition);
+			BacktrackTo(data, backtrackPosition);
 
-			AstNode* functionDefinition = ParseFunctionDefinition();
+			AstNode* functionDefinition = ParseFunctionDefinition(data);
 			if (functionDefinition->success)
 			{
 				return functionDefinition;
 			}
 			FreeNode(functionDefinition);
-			BacktrackTo(backtrackPosition);
+			BacktrackTo(data, backtrackPosition);
 
-			AstNode* templateDeclaration = ParseTemplateDeclaration();
+			AstNode* templateDeclaration = ParseTemplateDeclaration(data);
 			if (templateDeclaration->success)
 			{
 				return templateDeclaration;
 			}
 			FreeNode(templateDeclaration);
-			BacktrackTo(backtrackPosition);
+			BacktrackTo(data, backtrackPosition);
 
-			AstNode* explicitInstantiation = ParseExplicitInstantiation();
+			AstNode* explicitInstantiation = ParseExplicitInstantiation(data);
 			if (explicitInstantiation->success)
 			{
 				return explicitInstantiation;
 			}
 			FreeNode(explicitInstantiation);
-			BacktrackTo(backtrackPosition);
+			BacktrackTo(data, backtrackPosition);
 
-			AstNode* explicitSpecialization = ParseExplicitSpecialization();
+			AstNode* explicitSpecialization = ParseExplicitSpecialization(data);
 			if (explicitSpecialization->success)
 			{
 				return explicitSpecialization;
 			}
 			FreeNode(explicitSpecialization);
-			BacktrackTo(backtrackPosition);
+			BacktrackTo(data, backtrackPosition);
 
-			AstNode* linkageSpecification = ParseLinkageSpecification();
+			AstNode* linkageSpecification = ParseLinkageSpecification(data);
 			if (linkageSpecification->success)
 			{
 				return linkageSpecification;
 			}
 			FreeNode(linkageSpecification);
-			BacktrackTo(backtrackPosition);
+			BacktrackTo(data, backtrackPosition);
 
-			AstNode* namespaceDefinition = ParseNamespaceDefinition();
+			AstNode* namespaceDefinition = ParseNamespaceDefinition(data);
 			if (namespaceDefinition->success)
 			{
 				return namespaceDefinition;
 			}
 			FreeNode(namespaceDefinition);
-			BacktrackTo(backtrackPosition);
+			BacktrackTo(data, backtrackPosition);
 
-			AstNode* emptyDeclaration = ParseEmptyDeclaration();
+			AstNode* emptyDeclaration = ParseEmptyDeclaration(data);
 			if (emptyDeclaration->success)
 			{
 				return emptyDeclaration;
 			}
 			FreeNode(emptyDeclaration);
-			BacktrackTo(backtrackPosition);
+			BacktrackTo(data, backtrackPosition);
 
-			AstNode* attributeDeclaration = ParseAttributeDeclaration();
+			AstNode* attributeDeclaration = ParseAttributeDeclaration(data);
 			if (attributeDeclaration->success)
 			{
 				return attributeDeclaration;
 			}
 			FreeNode(attributeDeclaration);
-			BacktrackTo(backtrackPosition);
+			BacktrackTo(data, backtrackPosition);
 
-			AstNode* uSystemDeclaration = ParseUSystemDeclaration();
+			AstNode* uSystemDeclaration = ParseUSystemDeclaration(data);
 			if (uSystemDeclaration->success)
 			{
 				return uSystemDeclaration;
 			}
 			FreeNode(uSystemDeclaration);
-			BacktrackTo(backtrackPosition);
+			BacktrackTo(data, backtrackPosition);
 
 			return GenerateNoSuccessAstNode();
 		}
 
-		static AstNode* ParseBlockDeclaration()
+		static AstNode* ParseBlockDeclaration(ParserData& data)
 		{
-			int backtrackPosition = CurrentToken;
-			AstNode* simpleDeclaration = ParseSimpleDeclaration();
+			int backtrackPosition = data.CurrentToken;
+			AstNode* simpleDeclaration = ParseSimpleDeclaration(data);
 			if (simpleDeclaration->success)
 			{
 				return simpleDeclaration;
 			}
 			FreeNode(simpleDeclaration);
-			BacktrackTo(backtrackPosition);
+			BacktrackTo(data, backtrackPosition);
 
-			AstNode* asmDefinition = ParseAsmDefinition();
+			AstNode* asmDefinition = ParseAsmDefinition(data);
 			if (asmDefinition->success)
 			{
 				return asmDefinition;
 			}
 			FreeNode(asmDefinition);
-			BacktrackTo(backtrackPosition);
+			BacktrackTo(data, backtrackPosition);
 
-			AstNode* namespaceAliasDefinition = ParseNamespaceAliasDefinition();
+			AstNode* namespaceAliasDefinition = ParseNamespaceAliasDefinition(data);
 			if (namespaceAliasDefinition->success)
 			{
 				return namespaceAliasDefinition;
 			}
 			FreeNode(namespaceAliasDefinition);
-			BacktrackTo(backtrackPosition);
+			BacktrackTo(data, backtrackPosition);
 
-			AstNode* usingDeclaration = ParseUsingDeclaration();
+			AstNode* usingDeclaration = ParseUsingDeclaration(data);
 			if (usingDeclaration->success)
 			{
 				return usingDeclaration;
 			}
 			FreeNode(usingDeclaration);
-			BacktrackTo(backtrackPosition);
+			BacktrackTo(data, backtrackPosition);
 
-			AstNode* usingDirective = ParseUsingDirective();
+			AstNode* usingDirective = ParseUsingDirective(data);
 			if (usingDirective->success)
 			{
 				return usingDirective;
 			}
 			FreeNode(usingDirective);
-			BacktrackTo(backtrackPosition);
+			BacktrackTo(data, backtrackPosition);
 
-			AstNode* staticAssertDeclaration = ParseStaticAssertDeclaration();
+			AstNode* staticAssertDeclaration = ParseStaticAssertDeclaration(data);
 			if (staticAssertDeclaration->success)
 			{
 				return staticAssertDeclaration;
 			}
 			FreeNode(staticAssertDeclaration);
-			BacktrackTo(backtrackPosition);
+			BacktrackTo(data, backtrackPosition);
 
-			AstNode* aliasDeclaration = ParseAliasDeclaration();
+			AstNode* aliasDeclaration = ParseAliasDeclaration(data);
 			if (aliasDeclaration->success)
 			{
 				return aliasDeclaration;
 			}
 			FreeNode(aliasDeclaration);
-			BacktrackTo(backtrackPosition);
+			BacktrackTo(data, backtrackPosition);
 
-			AstNode* opaqueEnumDeclaration = ParseOpaqueEnumDeclaration();
+			AstNode* opaqueEnumDeclaration = ParseOpaqueEnumDeclaration(data);
 			if (opaqueEnumDeclaration->success)
 			{
 				return opaqueEnumDeclaration;
 			}
 			FreeNode(opaqueEnumDeclaration);
-			BacktrackTo(backtrackPosition);
+			BacktrackTo(data, backtrackPosition);
 
 			return GenerateNoSuccessAstNode();
 		}
 
-		static AstNode* ParseAliasDeclaration()
+		static AstNode* ParseAliasDeclaration(ParserData& data)
 		{
-			int backtrackPosition = CurrentToken;
-			if (Match(TokenType::KW_USING))
+			int backtrackPosition = data.CurrentToken;
+			if (Match(data, TokenType::KW_USING))
 			{
-				if (Peek() == TokenType::IDENTIFIER)
+				if (Peek(data) == TokenType::IDENTIFIER)
 				{
-					Token identifier = ConsumeCurrent(TokenType::IDENTIFIER);
-					Consume(TokenType::EQUAL);
-					AstNode* typeId = ParseTypeId();
+					Token identifier = ConsumeCurrent(data, TokenType::IDENTIFIER);
+					Consume(data, TokenType::EQUAL);
+					AstNode* typeId = ParseTypeId(data);
 					if (typeId->success)
 					{
-						Consume(TokenType::SEMICOLON);
+						Consume(data, TokenType::SEMICOLON);
 						return GenerateAliasDeclarationNode(identifier, typeId);
 					}
 					FreeNode(typeId);
 				}
 			}
 
-			BacktrackTo(backtrackPosition);
+			BacktrackTo(data, backtrackPosition);
 			return GenerateNoSuccessAstNode();
 		}
 
-		static AstNode* ParseSimpleDeclaration()
+		static AstNode* ParseSimpleDeclaration(ParserData& data)
 		{
-			int backtrackPosition = CurrentToken;
+			int backtrackPosition = data.CurrentToken;
 			// All optional
-			AstNode* attributeSpecifierSeq = ParseAttributeSpecifierSequence();
-			AstNode* declSpecifierSeq = ParseDeclarationSpecifierSequence();
-			AstNode* initDeclaratorList = ParseInitDeclaratorList();
+			AstNode* attributeSpecifierSeq = ParseAttributeSpecifierSequence(data);
+			AstNode* declSpecifierSeq = ParseDeclarationSpecifierSequence(data);
+			AstNode* initDeclaratorList = ParseInitDeclaratorList(data);
 			if (!(attributeSpecifierSeq->success || declSpecifierSeq->success || initDeclaratorList->success))
 			{
 				FreeNode(attributeSpecifierSeq);
 				FreeNode(declSpecifierSeq);
 				FreeNode(initDeclaratorList);
-				BacktrackTo(backtrackPosition);
+				BacktrackTo(data, backtrackPosition);
 				return GenerateNoSuccessAstNode();
 			}
 
-			if (Match(TokenType::SEMICOLON))
+			if (Match(data, TokenType::SEMICOLON))
 			{
 				return GenerateSimpleDeclarationNode(attributeSpecifierSeq, declSpecifierSeq, initDeclaratorList);
 			}
@@ -5274,20 +5321,20 @@ namespace CppParser
 			FreeNode(attributeSpecifierSeq);
 			FreeNode(declSpecifierSeq);
 			FreeNode(initDeclaratorList);
-			BacktrackTo(backtrackPosition);
+			BacktrackTo(data, backtrackPosition);
 			return GenerateNoSuccessAstNode();
 		}
 
-		static AstNode* ParseStaticAssertDeclaration()
+		static AstNode* ParseStaticAssertDeclaration(ParserData& data)
 		{
-			if (Match(TokenType::KW_STATIC_ASSERT))
+			if (Match(data, TokenType::KW_STATIC_ASSERT))
 			{
-				Consume(TokenType::LEFT_PAREN);
-				AstNode* constantExpression = ParseConstantExpression();
-				Consume(TokenType::COMMA);
-				Token stringLiteral = ConsumeCurrent(TokenType::STRING_LITERAL);
-				Consume(TokenType::RIGHT_PAREN);
-				Consume(TokenType::SEMICOLON);
+				Consume(data, TokenType::LEFT_PAREN);
+				AstNode* constantExpression = ParseConstantExpression(data);
+				Consume(data, TokenType::COMMA);
+				Token stringLiteral = ConsumeCurrent(data, TokenType::STRING_LITERAL);
+				Consume(data, TokenType::RIGHT_PAREN);
+				Consume(data, TokenType::SEMICOLON);
 
 				return GenerateStaticAssertDeclarationNode(constantExpression, stringLiteral);
 			}
@@ -5295,282 +5342,282 @@ namespace CppParser
 			return GenerateNoSuccessAstNode();
 		}
 
-		static AstNode* ParseEmptyDeclaration()
+		static AstNode* ParseEmptyDeclaration(ParserData& data)
 		{
-			if (Match(TokenType::SEMICOLON))
+			if (Match(data, TokenType::SEMICOLON))
 			{
 				return GenerateEmptyStatementNode();
 			}
 			return GenerateNoSuccessAstNode();
 		}
 
-		static AstNode* ParseAttributeDeclaration()
+		static AstNode* ParseAttributeDeclaration(ParserData& data)
 		{
-			int backtrackPosition = CurrentToken;
-			AstNode* attributeSpecifierSeq = ParseAttributeSpecifierSequence();
+			int backtrackPosition = data.CurrentToken;
+			AstNode* attributeSpecifierSeq = ParseAttributeSpecifierSequence(data);
 			if (!attributeSpecifierSeq->success)
 			{
 				FreeNode(attributeSpecifierSeq);
-				BacktrackTo(backtrackPosition);
+				BacktrackTo(data, backtrackPosition);
 				return GenerateNoSuccessAstNode();
 			}
-			Consume(TokenType::SEMICOLON);
+			Consume(data, TokenType::SEMICOLON);
 
 			return attributeSpecifierSeq;
 		}
 
-		static AstNode* ParseDeclarationSpecifier()
+		static AstNode* ParseDeclarationSpecifier(ParserData& data)
 		{
-			if (Peek() == TokenType::KW_FRIEND || Peek() == TokenType::KW_TYPEDEF || Peek() == TokenType::KW_CONST_EXPR)
+			if (Peek(data) == TokenType::KW_FRIEND || Peek(data) == TokenType::KW_TYPEDEF || Peek(data) == TokenType::KW_CONST_EXPR)
 			{
-				return GenerateSimpleDeclSpecifierNode(ConsumeCurrent(Peek()));
+				return GenerateSimpleDeclSpecifierNode(ConsumeCurrent(data, Peek(data)));
 			}
 
-			int backtrackPosition = CurrentToken;
-			AstNode* storageClassSpecifier = ParseStorageClassSpecifier();
+			int backtrackPosition = data.CurrentToken;
+			AstNode* storageClassSpecifier = ParseStorageClassSpecifier(data);
 			if (storageClassSpecifier->success)
 			{
 				return GenerateDeclSpecifierNode(storageClassSpecifier);
 			}
 			FreeNode(storageClassSpecifier);
-			BacktrackTo(backtrackPosition);
+			BacktrackTo(data, backtrackPosition);
 
-			AstNode* typeSpecifier = ParseTypeSpecifier();
+			AstNode* typeSpecifier = ParseTypeSpecifier(data);
 			if (typeSpecifier->success)
 			{
 				return GenerateDeclSpecifierNode(typeSpecifier);
 			}
 			FreeNode(typeSpecifier);
-			BacktrackTo(backtrackPosition);
+			BacktrackTo(data, backtrackPosition);
 
-			AstNode* functionSpecifier = ParseFunctionSpecifier();
+			AstNode* functionSpecifier = ParseFunctionSpecifier(data);
 			if (functionSpecifier->success)
 			{
 				return GenerateDeclSpecifierNode(functionSpecifier);
 			}
 			FreeNode(functionSpecifier);
-			BacktrackTo(backtrackPosition);
+			BacktrackTo(data, backtrackPosition);
 
 			return GenerateNoSuccessAstNode();
 		}
 
-		static AstNode* ParseDeclarationSpecifierSequence()
+		static AstNode* ParseDeclarationSpecifierSequence(ParserData& data)
 		{
-			int backtrackPosition = CurrentToken;
-			AstNode* result = ParseDeclarationSpecifier();
+			int backtrackPosition = data.CurrentToken;
+			AstNode* result = ParseDeclarationSpecifier(data);
 			if (!result->success)
 			{
 				FreeNode(result);
-				BacktrackTo(backtrackPosition);
+				BacktrackTo(data, backtrackPosition);
 				return GenerateNoSuccessAstNode();
 			}
 
-			AstNode* nextDeclSpec = ParseDeclarationSpecifierSequence();
+			AstNode* nextDeclSpec = ParseDeclarationSpecifierSequence(data);
 			result = GenerateDeclSpecSeqNode(result, nextDeclSpec, GenerateNoSuccessAstNode());
 			if (!nextDeclSpec->success)
 			{
 				FreeNode(result->declSpecSeq.attributeSpecifierSeq);
 				// Optional
-				result->declSpecSeq.attributeSpecifierSeq = ParseAttributeSpecifierSequence();
+				result->declSpecSeq.attributeSpecifierSeq = ParseAttributeSpecifierSequence(data);
 			}
 
 			return result;
 		}
 
-		static AstNode* ParseStorageClassSpecifier()
+		static AstNode* ParseStorageClassSpecifier(ParserData& data)
 		{
-			if (PeekIn({ TokenType::KW_AUTO, TokenType::KW_REGISTER, TokenType::KW_STATIC, TokenType::KW_THREAD_LOCAL, TokenType::KW_EXTERN, TokenType::KW_MUTABLE }))
+			if (PeekIn(data, { TokenType::KW_AUTO, TokenType::KW_REGISTER, TokenType::KW_STATIC, TokenType::KW_THREAD_LOCAL, TokenType::KW_EXTERN, TokenType::KW_MUTABLE }))
 			{
-				return GenerateStorageClassSpecNode(ConsumeCurrent(Peek()));
+				return GenerateStorageClassSpecNode(ConsumeCurrent(data, Peek(data)));
 			}
 
 			return GenerateNoSuccessAstNode();
 		}
 
-		static AstNode* ParseFunctionSpecifier()
+		static AstNode* ParseFunctionSpecifier(ParserData& data)
 		{
-			if (PeekIn({ TokenType::KW_INLINE, TokenType::KW_VIRTUAL, TokenType::KW_EXPLICIT }))
+			if (PeekIn(data, { TokenType::KW_INLINE, TokenType::KW_VIRTUAL, TokenType::KW_EXPLICIT }))
 			{
-				return GenerateFunctionSpecNode(ConsumeCurrent(Peek()));
+				return GenerateFunctionSpecNode(ConsumeCurrent(data, Peek(data)));
 			}
 
 			return GenerateNoSuccessAstNode();
 		}
 
 		// Types/typedefs
-		static AstNode* ParseTypedefName()
+		static AstNode* ParseTypedefName(ParserData& data)
 		{
-			if (Peek() == TokenType::IDENTIFIER)
+			if (Peek(data) == TokenType::IDENTIFIER)
 			{
-				return GenerateTypedefNameNode(ConsumeCurrent(TokenType::IDENTIFIER));
+				return GenerateTypedefNameNode(ConsumeCurrent(data, TokenType::IDENTIFIER));
 			}
 
 			return GenerateNoSuccessAstNode();
 		}
 
-		static AstNode* ParseTypeSpecifier()
+		static AstNode* ParseTypeSpecifier(ParserData& data)
 		{
-			int backtrackPosition = CurrentToken;
+			int backtrackPosition = data.CurrentToken;
 			// TODO: Is this right?
-			if (PeekIn({TokenType::KW_CLASS, TokenType::KW_UNION, TokenType::KW_STRUCT, TokenType::KW_ENUM}) &&
-				LookAheadBeforeSemicolon({ TokenType::LEFT_CURLY_BRACKET }))
+			if (PeekIn(data, { TokenType::KW_CLASS, TokenType::KW_UNION, TokenType::KW_STRUCT, TokenType::KW_ENUM }) &&
+				LookAheadBeforeSemicolon(data, { TokenType::LEFT_CURLY_BRACKET }))
 			{
-				AstNode* classSpecifier = ParseClassSpecifier();
+				AstNode* classSpecifier = ParseClassSpecifier(data);
 				if (classSpecifier->success)
 				{
 					return classSpecifier;
 				}
 				FreeNode(classSpecifier);
-				BacktrackTo(backtrackPosition);
+				BacktrackTo(data, backtrackPosition);
 
-				AstNode* enumSpecifier = ParseEnumSpecifier();
+				AstNode* enumSpecifier = ParseEnumSpecifier(data);
 				if (enumSpecifier->success)
 				{
 					return enumSpecifier;
 				}
 				FreeNode(enumSpecifier);
-				BacktrackTo(backtrackPosition);
+				BacktrackTo(data, backtrackPosition);
 			}
 
-			AstNode* trailingTypeSpecifier = ParseTrailingTypeSpecifier();
+			AstNode* trailingTypeSpecifier = ParseTrailingTypeSpecifier(data);
 			if (trailingTypeSpecifier->success)
 			{
 				return trailingTypeSpecifier;
 			}
 			FreeNode(trailingTypeSpecifier);
-			BacktrackTo(backtrackPosition);
+			BacktrackTo(data, backtrackPosition);
 
 			return GenerateNoSuccessAstNode();
 		}
 
-		static AstNode* ParseTrailingTypeSpecifier()
+		static AstNode* ParseTrailingTypeSpecifier(ParserData& data)
 		{
-			int backtrackPosition = CurrentToken;
-			AstNode* simpleTypeSpecifier = ParseSimpleTypeSpecifier();
+			int backtrackPosition = data.CurrentToken;
+			AstNode* simpleTypeSpecifier = ParseSimpleTypeSpecifier(data);
 			if (simpleTypeSpecifier->success)
 			{
 				return simpleTypeSpecifier;
 			}
 			FreeNode(simpleTypeSpecifier);
-			BacktrackTo(backtrackPosition);
+			BacktrackTo(data, backtrackPosition);
 
-			AstNode* elaboratedTypeSpecifier = ParseElaboratedTypeSpecifier();
+			AstNode* elaboratedTypeSpecifier = ParseElaboratedTypeSpecifier(data);
 			if (elaboratedTypeSpecifier->success)
 			{
 				return elaboratedTypeSpecifier;
 			}
 			FreeNode(elaboratedTypeSpecifier);
-			BacktrackTo(backtrackPosition);
+			BacktrackTo(data, backtrackPosition);
 
-			AstNode* typenameSpecifier = ParseTypenameSpecifier();
+			AstNode* typenameSpecifier = ParseTypenameSpecifier(data);
 			if (typenameSpecifier->success)
 			{
 				return typenameSpecifier;
 			}
 			FreeNode(typenameSpecifier);
-			BacktrackTo(backtrackPosition);
+			BacktrackTo(data, backtrackPosition);
 
-			AstNode* cvQualifier = ParseCvQualifier();
+			AstNode* cvQualifier = ParseCvQualifier(data);
 			if (cvQualifier->success)
 			{
 				return cvQualifier;
 			}
 			FreeNode(cvQualifier);
-			BacktrackTo(backtrackPosition);
+			BacktrackTo(data, backtrackPosition);
 
 			return GenerateNoSuccessAstNode();
 		}
 
-		static AstNode* ParseTypeSpecifierSequence()
+		static AstNode* ParseTypeSpecifierSequence(ParserData& data)
 		{
-			int backtrackPosition = CurrentToken;
-			AstNode* result = ParseTypeSpecifier();
+			int backtrackPosition = data.CurrentToken;
+			AstNode* result = ParseTypeSpecifier(data);
 			if (!result->success)
 			{
 				FreeNode(result);
-				BacktrackTo(backtrackPosition);
+				BacktrackTo(data, backtrackPosition);
 				return GenerateNoSuccessAstNode();
 			}
 
-			AstNode* nextTypeSpecifier = ParseTypeSpecifierSequence();
+			AstNode* nextTypeSpecifier = ParseTypeSpecifierSequence(data);
 			result = GenerateTypeSpecSeqNode(result, nextTypeSpecifier, GenerateNoSuccessAstNode());
 			if (!nextTypeSpecifier->success)
 			{
 				FreeNode(result->typeSpecSeq.attributeSpecifierSeq);
-				result->typeSpecSeq.attributeSpecifierSeq = ParseAttributeSpecifierSequence();
+				result->typeSpecSeq.attributeSpecifierSeq = ParseAttributeSpecifierSequence(data);
 			}
 
 			return result;
 		}
 
-		static AstNode* ParseTrailingTypeSpecifierSequence()
+		static AstNode* ParseTrailingTypeSpecifierSequence(ParserData& data)
 		{
-			int backtrackPosition = CurrentToken;
-			AstNode* result = ParseTrailingTypeSpecifier();
+			int backtrackPosition = data.CurrentToken;
+			AstNode* result = ParseTrailingTypeSpecifier(data);
 			if (!result->success)
 			{
 				FreeNode(result);
-				BacktrackTo(backtrackPosition);
+				BacktrackTo(data, backtrackPosition);
 				return GenerateNoSuccessAstNode();
 			}
 
-			AstNode* nextTypeSpecifier = ParseTrailingTypeSpecifierSequence();
+			AstNode* nextTypeSpecifier = ParseTrailingTypeSpecifierSequence(data);
 			result = GenerateTrailingTypeSpecSeqNode(result, nextTypeSpecifier, GenerateNoSuccessAstNode());
 			if (!nextTypeSpecifier->success)
 			{
 				FreeNode(result->trailingTypeSpecSeq.attributeSpecifierSeq);
-				result->trailingTypeSpecSeq.attributeSpecifierSeq = ParseAttributeSpecifierSequence();
+				result->trailingTypeSpecSeq.attributeSpecifierSeq = ParseAttributeSpecifierSequence(data);
 			}
 
 			return result;
 		}
 
-		static AstNode* ParseSimpleTypeSpecifier()
+		static AstNode* ParseSimpleTypeSpecifier(ParserData& data)
 		{
-			if (PeekIn({ TokenType::KW_CHAR, TokenType::KW_CHAR16_T, TokenType::KW_CHAR32_T, TokenType::KW_WCHAR_T, TokenType::KW_BOOL, TokenType::KW_SHORT, TokenType::KW_INT,
+			if (PeekIn(data, { TokenType::KW_CHAR, TokenType::KW_CHAR16_T, TokenType::KW_CHAR32_T, TokenType::KW_WCHAR_T, TokenType::KW_BOOL, TokenType::KW_SHORT, TokenType::KW_INT,
 				TokenType::KW_LONG, TokenType::KW_SIGNED, TokenType::KW_UNSIGNED, TokenType::KW_FLOAT, TokenType::KW_DOUBLE, TokenType::KW_VOID, TokenType::KW_AUTO }))
 			{
-				return GenerateSimpleTypeTokenSpecNode(ConsumeCurrent(Peek()));
+				return GenerateSimpleTypeTokenSpecNode(ConsumeCurrent(data, Peek(data)));
 			}
 
-			int backtrackPosition = CurrentToken;
-			AstNode* decltypeSpecifier = ParseDecltypeSpecifier();
+			int backtrackPosition = data.CurrentToken;
+			AstNode* decltypeSpecifier = ParseDecltypeSpecifier(data);
 			if (decltypeSpecifier->success)
 			{
 				return decltypeSpecifier;
 			}
 			FreeNode(decltypeSpecifier);
-			BacktrackTo(backtrackPosition);
+			BacktrackTo(data, backtrackPosition);
 
-			if (Match(TokenType::COLON))
+			if (Match(data, TokenType::COLON))
 			{
-				Consume(TokenType::COLON);
+				Consume(data, TokenType::COLON);
 			}
 
 			AstNode* nestedNameSpecifier = GenerateNoSuccessAstNode();
-			if (MatchBeforeSemicolon(TokenType::COLON, TokenType::COLON))
+			if (MatchBeforeSemicolon(data, TokenType::COLON, TokenType::COLON))
 			{
 				FreeNode(nestedNameSpecifier);
-				nestedNameSpecifier = ParseNestedNameSpecifier();
+				nestedNameSpecifier = ParseNestedNameSpecifier(data);
 			}
-			if (Match(TokenType::KW_TEMPLATE))
+			if (Match(data, TokenType::KW_TEMPLATE))
 			{
 				if (!nestedNameSpecifier->success)
 				{
 					FreeNode(nestedNameSpecifier);
-					BacktrackTo(backtrackPosition);
+					BacktrackTo(data, backtrackPosition);
 				}
-				AstNode* simpleTemplateId = ParseSimpleTemplateId();
+				AstNode* simpleTemplateId = ParseSimpleTemplateId(data);
 				if (simpleTemplateId->success)
 				{
 					return GenerateSimpleTypeTemplateSpecNode(nestedNameSpecifier, simpleTemplateId);
 				}
 				FreeNode(simpleTemplateId);
-				BacktrackTo(backtrackPosition);
+				BacktrackTo(data, backtrackPosition);
 				return GenerateNoSuccessAstNode();
 			}
 
-			AstNode* typeName = ParseTypeName();
+			AstNode* typeName = ParseTypeName(data);
 			if (typeName->success)
 			{
 				return GenerateSimpleTypeSpecNode(nestedNameSpecifier, typeName);
@@ -5578,133 +5625,133 @@ namespace CppParser
 
 			FreeNode(nestedNameSpecifier);
 			FreeNode(typeName);
-			BacktrackTo(backtrackPosition);
+			BacktrackTo(data, backtrackPosition);
 			return GenerateNoSuccessAstNode();
 		}
 
-		static AstNode* ParseTypeName()
+		static AstNode* ParseTypeName(ParserData& data)
 		{
-			int backtrackPosition = CurrentToken;
-			AstNode* simpleTemplateId = ParseSimpleTemplateId();
+			int backtrackPosition = data.CurrentToken;
+			AstNode* simpleTemplateId = ParseSimpleTemplateId(data);
 			if (simpleTemplateId->success)
 			{
 				return simpleTemplateId;
 			}
 			FreeNode(simpleTemplateId);
-			BacktrackTo(backtrackPosition);
+			BacktrackTo(data, backtrackPosition);
 
-			AstNode* className = ParseClassName();
+			AstNode* className = ParseClassName(data);
 			if (className->success)
 			{
 				return className;
 			}
 			FreeNode(className);
-			BacktrackTo(backtrackPosition);
+			BacktrackTo(data, backtrackPosition);
 
-			AstNode* enumName = ParseEnumName();
+			AstNode* enumName = ParseEnumName(data);
 			if (enumName->success)
 			{
 				return enumName;
 			}
 			FreeNode(enumName);
-			BacktrackTo(backtrackPosition);
+			BacktrackTo(data, backtrackPosition);
 
-			AstNode* typedefName = ParseTypedefName();
+			AstNode* typedefName = ParseTypedefName(data);
 			if (typedefName->success)
 			{
 				return typedefName;
 			}
 			FreeNode(typedefName);
-			BacktrackTo(backtrackPosition);
+			BacktrackTo(data, backtrackPosition);
 
 			return GenerateNoSuccessAstNode();
 		}
 
-		static AstNode* ParseDecltypeSpecifier()
+		static AstNode* ParseDecltypeSpecifier(ParserData& data)
 		{
-			if (Match(TokenType::KW_DECLTYPE))
+			if (Match(data, TokenType::KW_DECLTYPE))
 			{
-				Consume(TokenType::LEFT_PAREN);
-				AstNode* expression = ParseExpression();
-				Consume(TokenType::RIGHT_PAREN);
+				Consume(data, TokenType::LEFT_PAREN);
+				AstNode* expression = ParseExpression(data);
+				Consume(data, TokenType::RIGHT_PAREN);
 				return GenerateDecltypeSpecNode(expression);
 			}
 
 			return GenerateNoSuccessAstNode();
 		}
 
-		static AstNode* ParseElaboratedTypeSpecifier()
+		static AstNode* ParseElaboratedTypeSpecifier(ParserData& data)
 		{
-			if (Peek() == TokenType::KW_ENUM)
+			if (Peek(data) == TokenType::KW_ENUM)
 			{
-				bool hasScopeOp = Match(TokenType::COLON);
+				bool hasScopeOp = Match(data, TokenType::COLON);
 				if (hasScopeOp)
 				{
-					Consume(TokenType::COLON);
+					Consume(data, TokenType::COLON);
 				}
 
 				// Optional
 				AstNode* nestedNameSpecifier = GenerateNoSuccessAstNode();
-				if (MatchBeforeSemicolon(TokenType::COLON, TokenType::COLON))
+				if (MatchBeforeSemicolon(data, TokenType::COLON, TokenType::COLON))
 				{
 					FreeNode(nestedNameSpecifier);
-					nestedNameSpecifier = ParseNestedNameSpecifier();
+					nestedNameSpecifier = ParseNestedNameSpecifier(data);
 				}
-				Token identifier = ConsumeCurrent(TokenType::IDENTIFIER);
+				Token identifier = ConsumeCurrent(data, TokenType::IDENTIFIER);
 				return GenerateElaboratedSpecifierEnumNode(nestedNameSpecifier, identifier, hasScopeOp);
 			}
 
-			int backtrackPosition = CurrentToken;
-			AstNode* classKey = ParseClassKey();
+			int backtrackPosition = data.CurrentToken;
+			AstNode* classKey = ParseClassKey(data);
 			if (classKey->success)
 			{
-				int backtrackPosition2 = CurrentToken;
-				bool hasScopeOp = Match(TokenType::COLON);
+				int backtrackPosition2 = data.CurrentToken;
+				bool hasScopeOp = Match(data, TokenType::COLON);
 				if (hasScopeOp)
 				{
-					Consume(TokenType::COLON);
+					Consume(data, TokenType::COLON);
 				}
 
 				// TODO: Test if this actually works right...
-				bool isTemplate = LookAheadBeforeSemicolon({ TokenType::LEFT_ANGLE_BRACKET });
+				bool isTemplate = LookAheadBeforeSemicolon(data, { TokenType::LEFT_ANGLE_BRACKET });
 				if (isTemplate)
 				{
 					// Optional
 					AstNode* nestedNameSpecifier = GenerateNoSuccessAstNode();
-					if (MatchBeforeSemicolon(TokenType::COLON, TokenType::COLON))
+					if (MatchBeforeSemicolon(data, TokenType::COLON, TokenType::COLON))
 					{
 						FreeNode(nestedNameSpecifier);
-						nestedNameSpecifier = ParseNestedNameSpecifier();
+						nestedNameSpecifier = ParseNestedNameSpecifier(data);
 					}
-					bool hasTemplateKeyword = Match(TokenType::KW_TEMPLATE);
-					AstNode* simpleTemplateId = ParseSimpleTemplateId();
+					bool hasTemplateKeyword = Match(data, TokenType::KW_TEMPLATE);
+					AstNode* simpleTemplateId = ParseSimpleTemplateId(data);
 					if (simpleTemplateId->success)
 					{
 						return GenerateElaboratedSpecifierTemplateNode(classKey, nestedNameSpecifier, simpleTemplateId, hasScopeOp, hasTemplateKeyword);
 					}
 					FreeNode(simpleTemplateId);
 					FreeNode(nestedNameSpecifier);
-					BacktrackTo(backtrackPosition2);
+					BacktrackTo(data, backtrackPosition2);
 				}
 
 				// Optional
-				AstNode* attributeSpecifierSeq = ParseAttributeSpecifierSequence();
-				hasScopeOp = Match(TokenType::COLON);
+				AstNode* attributeSpecifierSeq = ParseAttributeSpecifierSequence(data);
+				hasScopeOp = Match(data, TokenType::COLON);
 				if (hasScopeOp)
 				{
-					Consume(TokenType::COLON);
+					Consume(data, TokenType::COLON);
 				}
 
 				// Optional
 				AstNode* nestedNameSpecifier = GenerateNoSuccessAstNode();
-				if (MatchBeforeSemicolon(TokenType::COLON, TokenType::COLON))
+				if (MatchBeforeSemicolon(data, TokenType::COLON, TokenType::COLON))
 				{
 					FreeNode(nestedNameSpecifier);
-					nestedNameSpecifier = ParseNestedNameSpecifier();
+					nestedNameSpecifier = ParseNestedNameSpecifier(data);
 				}
-				if (Peek() == TokenType::IDENTIFIER)
+				if (Peek(data) == TokenType::IDENTIFIER)
 				{
-					Token identifier = ConsumeCurrent(TokenType::IDENTIFIER);
+					Token identifier = ConsumeCurrent(data, TokenType::IDENTIFIER);
 					return GenerateElaboratedSpecifierClassNode(classKey, attributeSpecifierSeq, nestedNameSpecifier, identifier, hasScopeOp);
 				}
 				FreeNode(nestedNameSpecifier);
@@ -5712,118 +5759,118 @@ namespace CppParser
 			}
 
 			FreeNode(classKey);
-			BacktrackTo(backtrackPosition);
+			BacktrackTo(data, backtrackPosition);
 			return GenerateNoSuccessAstNode();
 		}
 
 		// Enums
-		static AstNode* ParseEnumName()
+		static AstNode* ParseEnumName(ParserData& data)
 		{
-			if (Peek() == TokenType::IDENTIFIER)
+			if (Peek(data) == TokenType::IDENTIFIER)
 			{
-				return GenerateEnumNameNode(ConsumeCurrent(TokenType::IDENTIFIER));
+				return GenerateEnumNameNode(ConsumeCurrent(data, TokenType::IDENTIFIER));
 			}
 
 			return GenerateNoSuccessAstNode();
 		}
 
-		static AstNode* ParseEnumSpecifier()
+		static AstNode* ParseEnumSpecifier(ParserData& data)
 		{
-			int backtrackPosition = CurrentToken;
-			AstNode* enumHead = ParseEnumHead();
+			int backtrackPosition = data.CurrentToken;
+			AstNode* enumHead = ParseEnumHead(data);
 			if (enumHead->success)
 			{
-				Consume(TokenType::LEFT_BRACKET);
+				Consume(data, TokenType::LEFT_BRACKET);
 				// This is optional it's ok if it fails
-				AstNode* enumeratorList = ParseEnumeratorList();
+				AstNode* enumeratorList = ParseEnumeratorList(data);
 				if (enumeratorList->success)
 				{
 					// We don't really care about this, but we want to make sure to parse it if it's there
-					bool trailingComma = Match(TokenType::COMMA);
+					bool trailingComma = Match(data, TokenType::COMMA);
 				}
-				Consume(TokenType::RIGHT_BRACKET);
+				Consume(data, TokenType::RIGHT_BRACKET);
 
 				return GenerateEnumSpecifierNode(enumHead, enumeratorList);
 			}
 
 			FreeNode(enumHead);
-			BacktrackTo(backtrackPosition);
+			BacktrackTo(data, backtrackPosition);
 			return GenerateNoSuccessAstNode();
 		}
 
-		static AstNode* ParseEnumHead()
+		static AstNode* ParseEnumHead(ParserData& data)
 		{
-			int backtrackPosition = CurrentToken;
-			AstNode* enumKey = ParseEnumKey();
+			int backtrackPosition = data.CurrentToken;
+			AstNode* enumKey = ParseEnumKey(data);
 			if (!enumKey->success)
 			{
 				FreeNode(enumKey);
-				BacktrackTo(backtrackPosition);
+				BacktrackTo(data, backtrackPosition);
 				return GenerateNoSuccessAstNode();
 			}
 
 			// This is optional
-			AstNode* attributeSpecifierSequence = ParseAttributeSpecifierSequence();
+			AstNode* attributeSpecifierSequence = ParseAttributeSpecifierSequence(data);
 
-			backtrackPosition = CurrentToken;
+			backtrackPosition = data.CurrentToken;
 			AstNode* nestedNameSpecifier = GenerateNoSuccessAstNode();
-			if (MatchBeforeSemicolon(TokenType::COLON, TokenType::COLON))
+			if (MatchBeforeSemicolon(data, TokenType::COLON, TokenType::COLON))
 			{
 				FreeNode(nestedNameSpecifier);
-				nestedNameSpecifier = ParseNestedNameSpecifier();
+				nestedNameSpecifier = ParseNestedNameSpecifier(data);
 			}
 			if (nestedNameSpecifier->success)
 			{
-				Token identifier = ConsumeCurrent(TokenType::IDENTIFIER);
+				Token identifier = ConsumeCurrent(data, TokenType::IDENTIFIER);
 				// This is also optional
-				AstNode* enumBase = ParseEnumBase();
+				AstNode* enumBase = ParseEnumBase(data);
 
 				return GenerateEnumHeadNode(enumKey, attributeSpecifierSequence, nestedNameSpecifier, identifier, enumBase);
 			}
 
 			FreeNode(nestedNameSpecifier);
-			BacktrackTo(backtrackPosition);
+			BacktrackTo(data, backtrackPosition);
 
 			Token identifier;
 			identifier.m_Type = TokenType::None;
-			if (Peek() == TokenType::IDENTIFIER)
+			if (Peek(data) == TokenType::IDENTIFIER)
 			{
-				identifier = ConsumeCurrent(TokenType::IDENTIFIER);
+				identifier = ConsumeCurrent(data, TokenType::IDENTIFIER);
 			}
 
 			// enum base is optional so this is fine
-			return GenerateEnumHeadNode(enumKey, attributeSpecifierSequence, GenerateNoSuccessAstNode(), identifier, ParseEnumBase());
+			return GenerateEnumHeadNode(enumKey, attributeSpecifierSequence, GenerateNoSuccessAstNode(), identifier, ParseEnumBase(data));
 		}
 
-		static AstNode* ParseOpaqueEnumDeclaration()
+		static AstNode* ParseOpaqueEnumDeclaration(ParserData& data)
 		{
-			int backtrackPosition = CurrentToken;
-			AstNode* enumKey = ParseEnumKey();
+			int backtrackPosition = data.CurrentToken;
+			AstNode* enumKey = ParseEnumKey(data);
 			if (!enumKey->success)
 			{
-				BacktrackTo(backtrackPosition);
+				BacktrackTo(data, backtrackPosition);
 				FreeNode(enumKey);
 				return GenerateNoSuccessAstNode();
 			}
 
-			AstNode* attributeSpecifierSeq = ParseAttributeSpecifierSequence();
-			Token identifier = ConsumeCurrent(TokenType::IDENTIFIER);
-			AstNode* enumBase = ParseEnumBase();
-			Consume(TokenType::SEMICOLON);
+			AstNode* attributeSpecifierSeq = ParseAttributeSpecifierSequence(data);
+			Token identifier = ConsumeCurrent(data, TokenType::IDENTIFIER);
+			AstNode* enumBase = ParseEnumBase(data);
+			Consume(data, TokenType::SEMICOLON);
 
 			return GenerateOpaqueEnumDeclNode(enumKey, attributeSpecifierSeq, identifier, enumBase);
 		}
 
-		static AstNode* ParseEnumKey()
+		static AstNode* ParseEnumKey(ParserData& data)
 		{
-			if (Match(TokenType::KW_ENUM))
+			if (Match(data, TokenType::KW_ENUM))
 			{
-				if (Match(TokenType::KW_CLASS))
+				if (Match(data, TokenType::KW_CLASS))
 				{
 					return GenerateEnumKeyNode(EnumKeyType::Class);
 				}
 
-				if (Match(TokenType::KW_STRUCT))
+				if (Match(data, TokenType::KW_STRUCT))
 				{
 					return GenerateEnumKeyNode(EnumKeyType::Struct);
 				}
@@ -5834,89 +5881,89 @@ namespace CppParser
 			return GenerateNoSuccessAstNode();
 		}
 
-		static AstNode* ParseEnumBase()
+		static AstNode* ParseEnumBase(ParserData& data)
 		{
-			if (Match(TokenType::COLON))
+			if (Match(data, TokenType::COLON))
 			{
-				AstNode* typeSpecifierSequence = ParseTypeSpecifierSequence();
+				AstNode* typeSpecifierSequence = ParseTypeSpecifierSequence(data);
 				return GenerateEnumBaseNode(typeSpecifierSequence);
 			}
 
 			return GenerateNoSuccessAstNode();
 		}
 
-		static AstNode* ParseEnumeratorList()
+		static AstNode* ParseEnumeratorList(ParserData& data)
 		{
-			AstNode* result = ParseEnumeratorDefinition();
+			AstNode* result = ParseEnumeratorDefinition(data);
 
-			while (Match(TokenType::COMMA))
+			while (Match(data, TokenType::COMMA))
 			{
-				result = GenerateEnumeratorListNode(result, ParseEnumeratorList());
+				result = GenerateEnumeratorListNode(result, ParseEnumeratorList(data));
 			}
 
 			return GenerateEnumeratorListNode(result, GenerateNoSuccessAstNode());
 		}
 
-		static AstNode* ParseEnumeratorDefinition()
+		static AstNode* ParseEnumeratorDefinition(ParserData& data)
 		{
-			Token identifier = ConsumeCurrent(TokenType::IDENTIFIER);
+			Token identifier = ConsumeCurrent(data, TokenType::IDENTIFIER);
 
-			AstNode* constantExpression = Match(TokenType::EQUAL) ?
-				ParseConstantExpression() :
+			AstNode* constantExpression = Match(data, TokenType::EQUAL) ?
+				ParseConstantExpression(data) :
 				GenerateNoSuccessAstNode();
 
 			return GenerateEnumeratorDefinitionNode(identifier, constantExpression);
 		}
 
 		// Namespaces
-		static AstNode* ParseNamespaceName()
+		static AstNode* ParseNamespaceName(ParserData& data)
 		{
-			if (Peek() == TokenType::IDENTIFIER)
+			if (Peek(data) == TokenType::IDENTIFIER)
 			{
-				return GenerateNamespaceNameNode(ConsumeCurrent(TokenType::IDENTIFIER));
+				return GenerateNamespaceNameNode(ConsumeCurrent(data, TokenType::IDENTIFIER));
 			}
 
 			return GenerateNoSuccessAstNode();
 		}
 
-		static AstNode* ParseNamespaceDefinition()
+		static AstNode* ParseNamespaceDefinition(ParserData& data)
 		{
-			int backtrackPosition = CurrentToken;
-			AstNode* namedNamespaceDefinition = ParseNamedNamespaceDefinition();
+			int backtrackPosition = data.CurrentToken;
+			AstNode* namedNamespaceDefinition = ParseNamedNamespaceDefinition(data);
 			if (namedNamespaceDefinition->success)
 			{
 				return namedNamespaceDefinition;
 			}
 			FreeNode(namedNamespaceDefinition);
-			BacktrackTo(backtrackPosition);
+			BacktrackTo(data, backtrackPosition);
 
-			AstNode* unnamedNamespaceDefinition = ParseUnnamedNamespaceDefinition();
+			AstNode* unnamedNamespaceDefinition = ParseUnnamedNamespaceDefinition(data);
 			if (unnamedNamespaceDefinition->success)
 			{
 				return unnamedNamespaceDefinition;
 			}
 			FreeNode(unnamedNamespaceDefinition);
-			BacktrackTo(backtrackPosition);
+			BacktrackTo(data, backtrackPosition);
 
 			return GenerateNoSuccessAstNode();
 		}
 
-		static AstNode* ParseNamedNamespaceDefinition()
+		static AstNode* ParseNamedNamespaceDefinition(ParserData& data)
 		{
-			int backtrackPosition = CurrentToken;
-			bool isInline = Match(TokenType::KW_INLINE);
-			if (Match(TokenType::KW_NAMESPACE))
+			int backtrackPosition = data.CurrentToken;
+			bool isInline = Match(data, TokenType::KW_INLINE);
+			if (Match(data, TokenType::KW_NAMESPACE))
 			{
-				if (!(Peek() == TokenType::IDENTIFIER))
+				if (!(Peek(data) == TokenType::IDENTIFIER))
 				{
-					BacktrackTo(backtrackPosition);
+					BacktrackTo(data, backtrackPosition);
 					return GenerateNoSuccessAstNode();
 				}
 
-				Token identifier = ConsumeCurrent(TokenType::IDENTIFIER);
-				Consume(TokenType::LEFT_CURLY_BRACKET);
-				AstNode* namespaceBody = ParseNamespaceBody();
-				Consume(TokenType::RIGHT_CURLY_BRACKET);
+				Token identifier = ConsumeCurrent(data, TokenType::IDENTIFIER);
+				Consume(data, TokenType::LEFT_CURLY_BRACKET);
+				AstNode* namespaceBody = ParseNamespaceBody(data);
+				Consume(data, TokenType::RIGHT_CURLY_BRACKET);
 
 				return GenerateNamedNamespaceDefinitionNode(isInline, identifier, namespaceBody);
 			}
@@ -5924,21 +5971,21 @@ namespace CppParser
 			return GenerateNoSuccessAstNode();
 		}
 
-		static AstNode* ParseUnnamedNamespaceDefinition()
+		static AstNode* ParseUnnamedNamespaceDefinition(ParserData& data)
 		{
-			int backtrackPosition = CurrentToken;
-			bool isInline = Match(TokenType::KW_INLINE);
-			if (Match(TokenType::KW_NAMESPACE))
+			int backtrackPosition = data.CurrentToken;
+			bool isInline = Match(data, TokenType::KW_INLINE);
+			if (Match(data, TokenType::KW_NAMESPACE))
 			{
-				if (Peek() != TokenType::LEFT_BRACKET)
+				if (Peek(data) != TokenType::LEFT_BRACKET)
 				{
-					BacktrackTo(backtrackPosition);
+					BacktrackTo(data, backtrackPosition);
 					return GenerateNoSuccessAstNode();
 				}
 
-				Consume(TokenType::LEFT_BRACKET);
-				AstNode* namespaceBody = ParseNamespaceBody();
-				Consume(TokenType::RIGHT_BRACKET);
+				Consume(data, TokenType::LEFT_BRACKET);
+				AstNode* namespaceBody = ParseNamespaceBody(data);
+				Consume(data, TokenType::RIGHT_BRACKET);
 
 				return GenerateUnnamedNamespaceDefinitionNode(isInline, namespaceBody);
 			}
@@ -5946,36 +5993,36 @@ namespace CppParser
 			return GenerateNoSuccessAstNode();
 		}
 
-		static AstNode* ParseNamespaceBody()
+		static AstNode* ParseNamespaceBody(ParserData& data)
 		{
-			int backtrackPosition = CurrentToken;
+			int backtrackPosition = data.CurrentToken;
 			// Optional
-			AstNode* declarationSequence = ParseDeclarationSequence();
+			AstNode* declarationSequence = ParseDeclarationSequence(data);
 			if (declarationSequence->success)
 			{
 				return declarationSequence;
 			}
 
 			FreeNode(declarationSequence);
-			BacktrackTo(backtrackPosition);
+			BacktrackTo(data, backtrackPosition);
 			return GenerateNoSuccessAstNode();
 		}
 
 		// Namespace alias
-		static AstNode* ParseNamespaceAliasDefinition()
+		static AstNode* ParseNamespaceAliasDefinition(ParserData& data)
 		{
-			int backtrackPosition = CurrentToken;
-			if (Match(TokenType::KW_NAMESPACE))
+			int backtrackPosition = data.CurrentToken;
+			if (Match(data, TokenType::KW_NAMESPACE))
 			{
-				Token identifier = ConsumeCurrent(TokenType::IDENTIFIER);
-				if (!Match(TokenType::EQUAL))
+				Token identifier = ConsumeCurrent(data, TokenType::IDENTIFIER);
+				if (!Match(data, TokenType::EQUAL))
 				{
-					BacktrackTo(backtrackPosition);
+					BacktrackTo(data, backtrackPosition);
 					return GenerateNoSuccessAstNode();
 				}
 
-				AstNode* qualifiedNamespaceSpecifier = ParseQualifiedNamespaceSpecifier();
-				Consume(TokenType::SEMICOLON);
+				AstNode* qualifiedNamespaceSpecifier = ParseQualifiedNamespaceSpecifier(data);
+				Consume(data, TokenType::SEMICOLON);
 
 				return GenerateNamespaceAliasDefinitionNode(identifier, qualifiedNamespaceSpecifier);
 			}
@@ -5983,21 +6030,21 @@ namespace CppParser
 			return GenerateNoSuccessAstNode();
 		}
 
-		static AstNode* ParseQualifiedNamespaceSpecifier()
+		static AstNode* ParseQualifiedNamespaceSpecifier(ParserData& data)
 		{
-			int backtrackPosition = CurrentToken;
+			int backtrackPosition = data.CurrentToken;
 
-			bool isNested = Match(TokenType::COLON);
-			if (isNested) Consume(TokenType::COLON);
+			bool isNested = Match(data, TokenType::COLON);
+			if (isNested) Consume(data, TokenType::COLON);
 
 			// This is optional
 			AstNode* nestedNameSpecifier = GenerateNoSuccessAstNode();
-			if (MatchBeforeSemicolon(TokenType::COLON, TokenType::COLON))
+			if (MatchBeforeSemicolon(data, TokenType::COLON, TokenType::COLON))
 			{
 				FreeNode(nestedNameSpecifier);
-				nestedNameSpecifier = ParseNestedNameSpecifier();
+				nestedNameSpecifier = ParseNestedNameSpecifier(data);
 			}
-			AstNode* namespaceName = ParseNamespaceName();
+			AstNode* namespaceName = ParseNamespaceName(data);
 			if (namespaceName->success)
 			{
 				return GenerateQualifiedNamespaceSpecifierNode(isNested, nestedNameSpecifier, namespaceName);
@@ -6005,34 +6052,34 @@ namespace CppParser
 
 			FreeNode(nestedNameSpecifier);
 			FreeNode(namespaceName);
-			BacktrackTo(backtrackPosition);
+			BacktrackTo(data, backtrackPosition);
 			return GenerateNoSuccessAstNode();
 		}
 
 		// Using
-		static AstNode* ParseUsingDeclaration()
+		static AstNode* ParseUsingDeclaration(ParserData& data)
 		{
-			if (Match(TokenType::KW_USING))
+			if (Match(data, TokenType::KW_USING))
 			{
-				if (Match(TokenType::COLON))
+				if (Match(data, TokenType::COLON))
 				{
-					Consume(TokenType::COLON);
-					AstNode* unqualifiedId = ParseUnqualifiedId();
-					Consume(TokenType::SEMICOLON);
+					Consume(data, TokenType::COLON);
+					AstNode* unqualifiedId = ParseUnqualifiedId(data);
+					Consume(data, TokenType::SEMICOLON);
 					return GenerateUsingDeclarationNode(unqualifiedId);
 				}
 
-				bool isTypename = Match(TokenType::KW_TYPENAME);
-				bool isNested = Match(TokenType::COLON);
-				if (isNested) Consume(TokenType::COLON);
+				bool isTypename = Match(data, TokenType::KW_TYPENAME);
+				bool isNested = Match(data, TokenType::COLON);
+				if (isNested) Consume(data, TokenType::COLON);
 				AstNode* nestedNameSpecifier = GenerateNoSuccessAstNode();
-				if (MatchBeforeSemicolon(TokenType::COLON, TokenType::COLON))
+				if (MatchBeforeSemicolon(data, TokenType::COLON, TokenType::COLON))
 				{
 					FreeNode(nestedNameSpecifier);
-					nestedNameSpecifier = ParseNestedNameSpecifier();
+					nestedNameSpecifier = ParseNestedNameSpecifier(data);
 				}
-				AstNode* unqualifiedId = ParseUnqualifiedId();
-				Consume(TokenType::SEMICOLON);
+				AstNode* unqualifiedId = ParseUnqualifiedId(data);
+				Consume(data, TokenType::SEMICOLON);
 
 				return GenerateUsingTypenameDeclarationNode(isTypename, isNested, nestedNameSpecifier, unqualifiedId);
 			}
@@ -6040,43 +6087,43 @@ namespace CppParser
 			return GenerateNoSuccessAstNode();
 		}
 
-		static AstNode* ParseUsingDirective()
+		static AstNode* ParseUsingDirective(ParserData& data)
 		{
-			int backtrackPosition = CurrentToken;
+			int backtrackPosition = data.CurrentToken;
 
 			// Optional
-			AstNode* attributeSpecifierSeq = ParseAttributeSpecifierSequence();
-			if (Match(TokenType::KW_USING))
+			AstNode* attributeSpecifierSeq = ParseAttributeSpecifierSequence(data);
+			if (Match(data, TokenType::KW_USING))
 			{
-				bool isNested = Match(TokenType::COLON);
-				if (isNested) Match(TokenType::COLON);
+				bool isNested = Match(data, TokenType::COLON);
+				if (isNested) Match(data, TokenType::COLON);
 
 				// Optional
 				AstNode* nestedNameSpecifier = GenerateNoSuccessAstNode();
-				if (MatchBeforeSemicolon(TokenType::COLON, TokenType::COLON))
+				if (MatchBeforeSemicolon(data, TokenType::COLON, TokenType::COLON))
 				{
 					FreeNode(nestedNameSpecifier);
-					nestedNameSpecifier = ParseNestedNameSpecifier();
+					nestedNameSpecifier = ParseNestedNameSpecifier(data);
 				}
-				AstNode* namespaceName = ParseNamespaceName();
-				Consume(TokenType::SEMICOLON);
+				AstNode* namespaceName = ParseNamespaceName(data);
+				Consume(data, TokenType::SEMICOLON);
 
 				return GenerateUsingDirectiveNode(attributeSpecifierSeq, isNested, nestedNameSpecifier, namespaceName);
 			}
 
 			FreeNode(attributeSpecifierSeq);
-			BacktrackTo(backtrackPosition);
+			BacktrackTo(data, backtrackPosition);
 			return GenerateNoSuccessAstNode();
 		}
 
-		static AstNode* ParseAsmDefinition()
+		static AstNode* ParseAsmDefinition(ParserData& data)
 		{
-			if (Match(TokenType::KW_ASM))
+			if (Match(data, TokenType::KW_ASM))
 			{
-				Consume(TokenType::LEFT_PAREN);
-				Token stringLiteral = ConsumeCurrent(TokenType::STRING_LITERAL);
-				Consume(TokenType::RIGHT_PAREN);
-				Consume(TokenType::SEMICOLON);
+				Consume(data, TokenType::LEFT_PAREN);
+				Token stringLiteral = ConsumeCurrent(data, TokenType::STRING_LITERAL);
+				Consume(data, TokenType::RIGHT_PAREN);
+				Consume(data, TokenType::SEMICOLON);
 
 				return GenerateAsmNode(stringLiteral);
 			}
@@ -6084,22 +6131,22 @@ namespace CppParser
 			return GenerateNoSuccessAstNode();
 		}
 
-		static AstNode* ParseLinkageSpecification()
+		static AstNode* ParseLinkageSpecification(ParserData& data)
 		{
-			if (Match(TokenType::KW_EXTERN))
+			if (Match(data, TokenType::KW_EXTERN))
 			{
-				Token stringLiteral = ConsumeCurrent(TokenType::STRING_LITERAL);
-				if (Match(TokenType::LEFT_BRACKET))
+				Token stringLiteral = ConsumeCurrent(data, TokenType::STRING_LITERAL);
+				if (Match(data, TokenType::LEFT_BRACKET))
 				{
 					// Optional
-					AstNode* declarationSeq = ParseDeclarationSequence();
-					Consume(TokenType::RIGHT_BRACKET);
+					AstNode* declarationSeq = ParseDeclarationSequence(data);
+					Consume(data, TokenType::RIGHT_BRACKET);
 
 					return GenerateLinkageSpecificationBlockNode(stringLiteral, declarationSeq);
 				}
 				else
 				{
-					AstNode* declaration = ParseDeclaration();
+					AstNode* declaration = ParseDeclaration(data);
 					return GenerateLinkageSpecificationNode(stringLiteral, declaration);
 				}
 			}
@@ -6108,65 +6155,65 @@ namespace CppParser
 		}
 
 		// Attribute Specifiers
-		static AstNode* ParseAttributeSpecifierSequence()
+		static AstNode* ParseAttributeSpecifierSequence(ParserData& data)
 		{
-			int backtrackPosition = CurrentToken;
-			AstNode* result = ParseAttributeSpecifier();
+			int backtrackPosition = data.CurrentToken;
+			AstNode* result = ParseAttributeSpecifier(data);
 			if (!result->success)
 			{
 				FreeNode(result);
-				BacktrackTo(backtrackPosition);
+				BacktrackTo(data, backtrackPosition);
 				return GenerateNoSuccessAstNode();
 			}
 
-			AstNode* nextSpec = ParseAttributeSpecifier();
+			AstNode* nextSpec = ParseAttributeSpecifier(data);
 			result = GenerateAttributeSpecifierSequenceNode(result, nextSpec);
 
 			return result;
 		}
 
-		static AstNode* ParseAttributeSpecifier()
+		static AstNode* ParseAttributeSpecifier(ParserData& data)
 		{
-			if (Match(TokenType::LEFT_BRACKET))
+			if (Match(data, TokenType::LEFT_BRACKET))
 			{
-				Consume(TokenType::LEFT_BRACKET);
-				AstNode* node = ParseAttributeList();
-				Consume(TokenType::RIGHT_BRACKET);
-				Consume(TokenType::RIGHT_BRACKET);
+				Consume(data, TokenType::LEFT_BRACKET);
+				AstNode* node = ParseAttributeList(data);
+				Consume(data, TokenType::RIGHT_BRACKET);
+				Consume(data, TokenType::RIGHT_BRACKET);
 				return node;
 			}
 
-			return ParseAlignmentSpecifier();
+			return ParseAlignmentSpecifier(data);
 		}
 
-		static AstNode* ParseAlignmentSpecifier()
+		static AstNode* ParseAlignmentSpecifier(ParserData& data)
 		{
-			if (Match(TokenType::KW_ALIGN_AS))
+			if (Match(data, TokenType::KW_ALIGN_AS))
 			{
-				Consume(TokenType::LEFT_PAREN);
-				int backtrackPosition = CurrentToken;
-				AstNode* typeId = ParseTypeId();
+				Consume(data, TokenType::LEFT_PAREN);
+				int backtrackPosition = data.CurrentToken;
+				AstNode* typeId = ParseTypeId(data);
 				if (typeId->success)
 				{
-					bool hasElipsis = Match(TokenType::DOT);
+					bool hasElipsis = Match(data, TokenType::DOT);
 					if (hasElipsis)
 					{
-						Consume(TokenType::DOT); Consume(TokenType::DOT);
+						Consume(data, TokenType::DOT); Consume(data, TokenType::DOT);
 					}
-					Consume(TokenType::RIGHT_PAREN);
+					Consume(data, TokenType::RIGHT_PAREN);
 
 					return GenerateAlignAsTypeIdNode(typeId, hasElipsis);
 				}
 				FreeNode(typeId);
-				BacktrackTo(backtrackPosition);
+				BacktrackTo(data, backtrackPosition);
 
-				AstNode* alignmentExpression = ParseAlignmentExpression();
-				bool hasElipsis = Match(TokenType::DOT);
+				AstNode* alignmentExpression = ParseAlignmentExpression(data);
+				bool hasElipsis = Match(data, TokenType::DOT);
 				if (hasElipsis)
 				{
-					Consume(TokenType::DOT); Consume(TokenType::DOT);
+					Consume(data, TokenType::DOT); Consume(data, TokenType::DOT);
 				}
-				Consume(TokenType::RIGHT_PAREN);
+				Consume(data, TokenType::RIGHT_PAREN);
 
 				return GenerateAlignAsExpressionNode(alignmentExpression, hasElipsis);
 			}
@@ -6174,62 +6221,62 @@ namespace CppParser
 			return GenerateNoSuccessAstNode();
 		}
 
-		static AstNode* ParseAttributeList()
+		static AstNode* ParseAttributeList(ParserData& data)
 		{
-			int backtrackPosition = CurrentToken;
-			AstNode* result = ParseAttribute();
+			int backtrackPosition = data.CurrentToken;
+			AstNode* result = ParseAttribute(data);
 			if (!result->success)
 			{
 				FreeNode(result);
-				BacktrackTo(backtrackPosition);
+				BacktrackTo(data, backtrackPosition);
 
 				return GenerateEmptyAttributeListNode();
 			}
 
-			while (Match(TokenType::COMMA))
+			while (Match(data, TokenType::COMMA))
 			{
-				result = GenerateAttributeListNode(result, ParseAttributeList());
+				result = GenerateAttributeListNode(result, ParseAttributeList(data));
 			}
 
-			bool trailingComma = Match(TokenType::COMMA);
+			bool trailingComma = Match(data, TokenType::COMMA);
 			bool elipsis = false;
-			if (Match(TokenType::DOT))
+			if (Match(data, TokenType::DOT))
 			{
-				Consume(TokenType::DOT); Consume(TokenType::DOT);
+				Consume(data, TokenType::DOT); Consume(data, TokenType::DOT);
 				elipsis = true;
 				if (trailingComma)
 				{
-					ErrorAtToken();
+					ErrorAtToken(data);
 				}
 			}
 
 			return result;
 		}
 
-		static AstNode* ParseAttribute()
+		static AstNode* ParseAttribute(ParserData& data)
 		{
-			int backtrackPosition = CurrentToken;
-			AstNode* attributeToken = ParseAttributeToken();
+			int backtrackPosition = data.CurrentToken;
+			AstNode* attributeToken = ParseAttributeToken(data);
 			if (!attributeToken->success)
 			{
 				FreeNode(attributeToken);
-				BacktrackTo(backtrackPosition);
+				BacktrackTo(data, backtrackPosition);
 				return GenerateNoSuccessAstNode();
 			}
 			// Optional
-			AstNode* attributeArgumentClause = ParseAttributeArgumentClause();
+			AstNode* attributeArgumentClause = ParseAttributeArgumentClause(data);
 			return GenerateAttributeNode(attributeToken, attributeArgumentClause);
 		}
 
-		static AstNode* ParseAttributeToken()
+		static AstNode* ParseAttributeToken(ParserData& data)
 		{
-			if (Peek() == TokenType::IDENTIFIER)
+			if (Peek(data) == TokenType::IDENTIFIER)
 			{
-				Token id1 = ConsumeCurrent(TokenType::IDENTIFIER);
-				if (Match(TokenType::COLON))
+				Token id1 = ConsumeCurrent(data, TokenType::IDENTIFIER);
+				if (Match(data, TokenType::COLON))
 				{
-					Consume(TokenType::COLON);
-					Token identifier = ConsumeCurrent(TokenType::IDENTIFIER);
+					Consume(data, TokenType::COLON);
+					Token identifier = ConsumeCurrent(data, TokenType::IDENTIFIER);
 					return GenerateAttributeTokenNode(id1, identifier);
 				}
 
@@ -6241,12 +6288,12 @@ namespace CppParser
 			return GenerateNoSuccessAstNode();
 		}
 
-		static AstNode* ParseAttributeArgumentClause()
+		static AstNode* ParseAttributeArgumentClause(ParserData& data)
 		{
-			if (Match(TokenType::LEFT_PAREN))
+			if (Match(data, TokenType::LEFT_PAREN))
 			{
-				AstNode* balancedTokenSeq = ParseBalancedTokenSequence();
-				Consume(TokenType::RIGHT_PAREN);
+				AstNode* balancedTokenSeq = ParseBalancedTokenSequence(data);
+				Consume(data, TokenType::RIGHT_PAREN);
 
 				return GenerateAttributeArgumentClauseNode(balancedTokenSeq);
 			}
@@ -6254,92 +6301,92 @@ namespace CppParser
 			return GenerateNoSuccessAstNode();
 		}
 
-		static AstNode* ParseBalancedTokenSequence()
+		static AstNode* ParseBalancedTokenSequence(ParserData& data)
 		{
-			int backtrackPosition = CurrentToken;
-			AstNode* result = ParseBalancedToken();
+			int backtrackPosition = data.CurrentToken;
+			AstNode* result = ParseBalancedToken(data);
 			if (!result->success)
 			{
 				FreeNode(result);
-				BacktrackTo(backtrackPosition);
+				BacktrackTo(data, backtrackPosition);
 				return GenerateNoSuccessAstNode();
 			}
 
-			AstNode* nextBalancedToken = ParseBalancedTokenSequence();
+			AstNode* nextBalancedToken = ParseBalancedTokenSequence(data);
 			result = GenerateBalancedTokenSeqNode(result, nextBalancedToken);
 
 			return result;
 		}
 
-		static AstNode* ParseBalancedToken()
+		static AstNode* ParseBalancedToken(ParserData& data)
 		{
-			if (Match(TokenType::LEFT_PAREN))
+			if (Match(data, TokenType::LEFT_PAREN))
 			{
-				AstNode* result = ParseBalancedTokenSequence();
-				Consume(TokenType::RIGHT_PAREN);
+				AstNode* result = ParseBalancedTokenSequence(data);
+				Consume(data, TokenType::RIGHT_PAREN);
 				return result;
 			}
 
-			if (Match(TokenType::LEFT_BRACKET))
+			if (Match(data, TokenType::LEFT_BRACKET))
 			{
-				AstNode* result = ParseBalancedTokenSequence();
-				Consume(TokenType::RIGHT_BRACKET);
+				AstNode* result = ParseBalancedTokenSequence(data);
+				Consume(data, TokenType::RIGHT_BRACKET);
 				return result;
 			}
 
-			if (Match(TokenType::LEFT_CURLY_BRACKET))
+			if (Match(data, TokenType::LEFT_CURLY_BRACKET))
 			{
-				AstNode* result = ParseBalancedTokenSequence();
-				Consume(TokenType::RIGHT_CURLY_BRACKET);
+				AstNode* result = ParseBalancedTokenSequence(data);
+				Consume(data, TokenType::RIGHT_CURLY_BRACKET);
 				return result;
 			}
 
-			return GenerateBalancedTokenNode(ConsumeCurrent(Peek()));
+			return GenerateBalancedTokenNode(ConsumeCurrent(data, Peek(data)));
 		}
 
 		// Declarations
-		static AstNode* ParseInitDeclaratorList()
+		static AstNode* ParseInitDeclaratorList(ParserData& data)
 		{
-			int backtrackPosition = CurrentToken;
-			AstNode* result = ParseInitDeclarator();
+			int backtrackPosition = data.CurrentToken;
+			AstNode* result = ParseInitDeclarator(data);
 			if (!result->success)
 			{
 				FreeNode(result);
-				BacktrackTo(backtrackPosition);
+				BacktrackTo(data, backtrackPosition);
 				return GenerateNoSuccessAstNode();
 			}
 
-			AstNode* nextDeclarator = ParseInitDeclaratorList();
+			AstNode* nextDeclarator = ParseInitDeclaratorList(data);
 			result = GenerateInitDeclaratorListNode(result, nextDeclarator);
 
 			return result;
 		}
 
-		static AstNode* ParseInitDeclarator()
+		static AstNode* ParseInitDeclarator(ParserData& data)
 		{
-			int backtrackPosition = CurrentToken;
-			AstNode* declarator = ParseDeclarator();
+			int backtrackPosition = data.CurrentToken;
+			AstNode* declarator = ParseDeclarator(data);
 			if (!declarator->success)
 			{
 				FreeNode(declarator);
-				BacktrackTo(backtrackPosition);
+				BacktrackTo(data, backtrackPosition);
 				return GenerateNoSuccessAstNode();
 			}
 
 			// Optional
-			AstNode* initializer = ParseInitializer();
+			AstNode* initializer = ParseInitializer(data);
 
 			return GenerateInitDeclaratorNode(declarator, initializer);
 		}
 
-		static AstNode* ParseDeclarator()
+		static AstNode* ParseDeclarator(ParserData& data)
 		{
-			int backtrackPosition = CurrentToken;
-			AstNode* noPtrDeclarator = ParseNoPtrDeclarator();
+			int backtrackPosition = data.CurrentToken;
+			AstNode* noPtrDeclarator = ParseNoPtrDeclarator(data);
 			if (noPtrDeclarator->success)
 			{
-				AstNode* parametersAndQualifiers = ParseParametersAndQualifiers();
-				AstNode* trailingReturnType = ParseTrailingReturnType();
+				AstNode* parametersAndQualifiers = ParseParametersAndQualifiers(data);
+				AstNode* trailingReturnType = ParseTrailingReturnType(data);
 				if (parametersAndQualifiers->success && trailingReturnType->success)
 				{
 					return GenerateDeclaratorNode(noPtrDeclarator, parametersAndQualifiers, trailingReturnType);
@@ -6348,34 +6395,34 @@ namespace CppParser
 				FreeNode(trailingReturnType);
 			}
 			FreeNode(noPtrDeclarator);
-			BacktrackTo(backtrackPosition);
+			BacktrackTo(data, backtrackPosition);
 
-			AstNode* ptrDeclarator = ParsePtrDeclarator();
+			AstNode* ptrDeclarator = ParsePtrDeclarator(data);
 			if (ptrDeclarator->success)
 			{
 				return ptrDeclarator;
 			}
 
 			FreeNode(ptrDeclarator);
-			BacktrackTo(backtrackPosition);
+			BacktrackTo(data, backtrackPosition);
 			return GenerateNoSuccessAstNode();
 		}
 
-		static AstNode* ParsePtrDeclarator()
+		static AstNode* ParsePtrDeclarator(ParserData& data)
 		{
-			int backtrackPosition = CurrentToken;
-			AstNode* noPtrDeclarator = ParseNoPtrDeclarator();
+			int backtrackPosition = data.CurrentToken;
+			AstNode* noPtrDeclarator = ParseNoPtrDeclarator(data);
 			if (noPtrDeclarator->success)
 			{
 				return noPtrDeclarator;
 			}
 			FreeNode(noPtrDeclarator);
-			BacktrackTo(backtrackPosition);
+			BacktrackTo(data, backtrackPosition);
 
-			AstNode* ptrOperator = ParsePtrOperator();
+			AstNode* ptrOperator = ParsePtrOperator(data);
 			if (ptrOperator->success)
 			{
-				AstNode* ptrDeclarator = ParsePtrDeclarator();
+				AstNode* ptrDeclarator = ParsePtrDeclarator(data);
 				if (ptrDeclarator->success)
 				{
 					return GeneratePtrDeclaratorNode(ptrOperator, ptrDeclarator);
@@ -6384,69 +6431,69 @@ namespace CppParser
 			}
 
 			FreeNode(ptrOperator);
-			BacktrackTo(backtrackPosition);
+			BacktrackTo(data, backtrackPosition);
 			return GenerateNoSuccessAstNode();
 		}
 
-		static AstNode* ParseNoPtrDeclarator()
+		static AstNode* ParseNoPtrDeclarator(ParserData& data)
 		{
-			int backtrackPosition = CurrentToken;
-			AstNode* parametersAndQualifiers = ParseParametersAndQualifiers();
+			int backtrackPosition = data.CurrentToken;
+			AstNode* parametersAndQualifiers = ParseParametersAndQualifiers(data);
 			if (parametersAndQualifiers->success)
 			{
-				AstNode* noptrDeclarator = ParseNoPtrDeclarator();
+				AstNode* noptrDeclarator = ParseNoPtrDeclarator(data);
 				return GenerateNoPtrParamAndQualDeclaratorNode(parametersAndQualifiers, noptrDeclarator);
 			}
 			FreeNode(parametersAndQualifiers);
-			BacktrackTo(backtrackPosition);
+			BacktrackTo(data, backtrackPosition);
 
-			if (Match(TokenType::LEFT_PAREN))
+			if (Match(data, TokenType::LEFT_PAREN))
 			{
-				AstNode* ptrDeclarator = ParsePtrDeclarator();
+				AstNode* ptrDeclarator = ParsePtrDeclarator(data);
 				if (ptrDeclarator->success)
 				{
 					return GenerateNoPtrParenDeclaratorNode(ptrDeclarator);
 				}
 				FreeNode(ptrDeclarator);
-				BacktrackTo(backtrackPosition);
+				BacktrackTo(data, backtrackPosition);
 			}
 
-			if (Match(TokenType::LEFT_BRACKET))
+			if (Match(data, TokenType::LEFT_BRACKET))
 			{
-				AstNode* constantExpression = ParseConstantExpression();
-				Consume(TokenType::RIGHT_BRACKET);
-				AstNode* attributeSpecifierSeq = ParseAttributeSpecifierSequence();
-				AstNode* noptrDeclarator = ParseNoPtrDeclarator();
+				AstNode* constantExpression = ParseConstantExpression(data);
+				Consume(data, TokenType::RIGHT_BRACKET);
+				AstNode* attributeSpecifierSeq = ParseAttributeSpecifierSequence(data);
+				AstNode* noptrDeclarator = ParseNoPtrDeclarator(data);
 				return GenerateNoPtrBracketDeclaratorNode(constantExpression, attributeSpecifierSeq, noptrDeclarator);
 			}
 
-			AstNode* declaratorId = ParseDeclaratorId();
+			AstNode* declaratorId = ParseDeclaratorId(data);
 			if (declaratorId->success)
 			{
 				// Optional
-				AstNode* attributeSpecifierSeq = ParseAttributeSpecifierSequence();
+				AstNode* attributeSpecifierSeq = ParseAttributeSpecifierSequence(data);
 				return GenerateNoPtrDeclaratorNode(declaratorId, attributeSpecifierSeq);
 			}
 			FreeNode(declaratorId);
-			BacktrackTo(backtrackPosition);
+			BacktrackTo(data, backtrackPosition);
 
 			return GenerateNoSuccessAstNode();
 		}
 
-		static AstNode* ParseParametersAndQualifiers()
+		static AstNode* ParseParametersAndQualifiers(ParserData& data)
 		{
-			if (Match(TokenType::LEFT_PAREN))
+			if (Match(data, TokenType::LEFT_PAREN))
 			{
-				AstNode* parameterDeclarationClause = ParseParameterDeclarationClause();
-				Consume(TokenType::RIGHT_PAREN);
+				AstNode* parameterDeclarationClause = ParseParameterDeclarationClause(data);
+				Consume(data, TokenType::RIGHT_PAREN);
 				// Optional
-				AstNode* attributeSpecifierSeq = ParseAttributeSpecifierSequence();
+				AstNode* attributeSpecifierSeq = ParseAttributeSpecifierSequence(data);
 				// Optional
-				AstNode* cvQualifierSeq = ParseCvQualifierSequence();
+				AstNode* cvQualifierSeq = ParseCvQualifierSequence(data);
 				// Optional
-				AstNode* refQualifier = ParseRefQualifier();
+				AstNode* refQualifier = ParseRefQualifier(data);
 				// Optional
-				AstNode* exceptionSpec = ParseExceptionSpecification();
+				AstNode* exceptionSpec = ParseExceptionSpecification(data);
 
 				return GenerateParametersAndQualifiersNode(parameterDeclarationClause, attributeSpecifierSeq, cvQualifierSeq, refQualifier, exceptionSpec);
 			}
@@ -6454,21 +6501,21 @@ namespace CppParser
 			return GenerateNoSuccessAstNode();
 		}
 
-		static AstNode* ParseTrailingReturnType()
+		static AstNode* ParseTrailingReturnType(ParserData& data)
 		{
-			int backtrackPosition = CurrentToken;
-			if (Match(TokenType::ARROW))
+			int backtrackPosition = data.CurrentToken;
+			if (Match(data, TokenType::ARROW))
 			{
-				AstNode* trailingTypeSpecifierSeq = ParseTrailingTypeSpecifierSequence();
+				AstNode* trailingTypeSpecifierSeq = ParseTrailingTypeSpecifierSequence(data);
 				if (!trailingTypeSpecifierSeq->success)
 				{
 					FreeNode(trailingTypeSpecifierSeq);
-					BacktrackTo(backtrackPosition);
+					BacktrackTo(data, backtrackPosition);
 					return GenerateNoSuccessAstNode();
 				}
 
 				// Optional
-				AstNode* abstractDeclarator = ParseAbstractDeclarator();
+				AstNode* abstractDeclarator = ParseAbstractDeclarator(data);
 
 				return GenerateTrailingReturnTypeNode(trailingTypeSpecifierSeq, abstractDeclarator);
 			}
@@ -6476,68 +6523,68 @@ namespace CppParser
 			return GenerateNoSuccessAstNode();
 		}
 
-		static AstNode* ParsePtrOperator()
+		static AstNode* ParsePtrOperator(ParserData& data)
 		{
-			if (Match(TokenType::STAR))
+			if (Match(data, TokenType::STAR))
 			{
 				// Optional
-				AstNode* attributeSpecifierSeq = ParseAttributeSpecifierSequence();
+				AstNode* attributeSpecifierSeq = ParseAttributeSpecifierSequence(data);
 				// Optional
-				AstNode* cvQualifierSeq = ParseCvQualifierSequence();
+				AstNode* cvQualifierSeq = ParseCvQualifierSequence(data);
 				return GeneratePtrStarNode(attributeSpecifierSeq, cvQualifierSeq);
 			}
 
-			if (Match(TokenType::AND))
+			if (Match(data, TokenType::AND))
 			{
-				if (Match(TokenType::AND))
+				if (Match(data, TokenType::AND))
 				{
-					return GenerateRefRefNode(ParseAttributeSpecifierSequence());
+					return GenerateRefRefNode(ParseAttributeSpecifierSequence(data));
 				}
 
-				return GenerateRefNode(ParseAttributeSpecifierSequence());
+				return GenerateRefNode(ParseAttributeSpecifierSequence(data));
 			}
 
-			int backtrackPosition = CurrentToken;
-			if (Match(TokenType::COLON))
+			int backtrackPosition = data.CurrentToken;
+			if (Match(data, TokenType::COLON))
 			{
-				Consume(TokenType::COLON);
+				Consume(data, TokenType::COLON);
 				AstNode* nestedNameSpecifier = GenerateNoSuccessAstNode();
-				if (MatchBeforeSemicolon(TokenType::COLON, TokenType::COLON))
+				if (MatchBeforeSemicolon(data, TokenType::COLON, TokenType::COLON))
 				{
 					FreeNode(nestedNameSpecifier);
-					nestedNameSpecifier = ParseNestedNameSpecifier();
+					nestedNameSpecifier = ParseNestedNameSpecifier(data);
 				}
 				if (!nestedNameSpecifier)
 				{
 					FreeNode(nestedNameSpecifier);
-					BacktrackTo(backtrackPosition);
+					BacktrackTo(data, backtrackPosition);
 					return GenerateNoSuccessAstNode();
 				}
 
-				Consume(TokenType::STAR);
+				Consume(data, TokenType::STAR);
 				// Both optional
-				AstNode* attributeSpecifierSeq = ParseAttributeSpecifierSequence();
-				AstNode* cvQualifierSeq = ParseCvQualifierSequence();
+				AstNode* attributeSpecifierSeq = ParseAttributeSpecifierSequence(data);
+				AstNode* cvQualifierSeq = ParseCvQualifierSequence(data);
 				return GeneratePtrNamespaceStarNode(nestedNameSpecifier, attributeSpecifierSeq, cvQualifierSeq);
 			}
 
 			return GenerateNoSuccessAstNode();
 		}
 
-		static AstNode* ParseCvQualifierSequence()
+		static AstNode* ParseCvQualifierSequence(ParserData& data)
 		{
-			int backtrackPosition = CurrentToken;
-			AstNode* result = ParseCvQualifier();
+			int backtrackPosition = data.CurrentToken;
+			AstNode* result = ParseCvQualifier(data);
 			if (!result->success)
 			{
 				FreeNode(result);
-				BacktrackTo(backtrackPosition);
+				BacktrackTo(data, backtrackPosition);
 				return GenerateNoSuccessAstNode();
 			}
 
 			while (true)
 			{
-				AstNode* nextQualifier = ParseCvQualifierSequence();
+				AstNode* nextQualifier = ParseCvQualifierSequence(data);
 				result = GenerateCvQualifierSeqNode(result, nextQualifier);
 				if (!nextQualifier->success)
 				{
@@ -6548,77 +6595,77 @@ namespace CppParser
 			return result;
 		}
 
-		static AstNode* ParseCvQualifier()
+		static AstNode* ParseCvQualifier(ParserData& data)
 		{
-			if (Peek() == TokenType::KW_CONST || Peek() == TokenType::KW_VOLATILE)
+			if (Peek(data) == TokenType::KW_CONST || Peek(data) == TokenType::KW_VOLATILE)
 			{
-				Token token = ConsumeCurrent(Peek());
+				Token token = ConsumeCurrent(data, Peek(data));
 				return GenerateCvQualifierNode(token);
 			}
 
 			return GenerateNoSuccessAstNode();
 		}
 
-		static AstNode* ParseRefQualifier()
+		static AstNode* ParseRefQualifier(ParserData& data)
 		{
-			if (Match(TokenType::AND))
+			if (Match(data, TokenType::AND))
 			{
-				bool doubleRef = Match(TokenType::AND);
+				bool doubleRef = Match(data, TokenType::AND);
 				return GenerateRefQualifierNode(doubleRef);
 			}
 
 			return GenerateNoSuccessAstNode();
 		}
 
-		static AstNode* ParseDeclaratorId()
+		static AstNode* ParseDeclaratorId(ParserData& data)
 		{
-			if (Match(TokenType::DOT))
+			if (Match(data, TokenType::DOT))
 			{
-				Consume(TokenType::DOT);
-				Consume(TokenType::DOT);
-				return ParseIdExpression();
+				Consume(data, TokenType::DOT);
+				Consume(data, TokenType::DOT);
+				return ParseIdExpression(data);
 			}
 
-			int backtrackPosition = CurrentToken;
-			if (Match(TokenType::COLON))
+			int backtrackPosition = data.CurrentToken;
+			if (Match(data, TokenType::COLON))
 			{
-				Consume(TokenType::COLON);
+				Consume(data, TokenType::COLON);
 				// Optional
 				AstNode* nestedNameSpecifier = GenerateNoSuccessAstNode();
-				if (MatchBeforeSemicolon(TokenType::COLON, TokenType::COLON))
+				if (MatchBeforeSemicolon(data, TokenType::COLON, TokenType::COLON))
 				{
 					FreeNode(nestedNameSpecifier);
-					nestedNameSpecifier = ParseNestedNameSpecifier();
+					nestedNameSpecifier = ParseNestedNameSpecifier(data);
 				}
-				AstNode* className = ParseClassName();
+				AstNode* className = ParseClassName(data);
 				if (!className->success)
 				{
 					FreeNode(nestedNameSpecifier);
 					FreeNode(className);
-					BacktrackTo(backtrackPosition);
+					BacktrackTo(data, backtrackPosition);
 					return GenerateNoSuccessAstNode();
 				}
 
 				return GenerateDeclaratorIdNode(nestedNameSpecifier, className);
 			}
 
-			backtrackPosition = CurrentToken;
-			AstNode* idExpression = ParseIdExpression();
+			backtrackPosition = data.CurrentToken;
+			AstNode* idExpression = ParseIdExpression(data);
 			if (idExpression->success)
 			{
 				return idExpression;
 			}
 			FreeNode(idExpression);
-			BacktrackTo(backtrackPosition);
+			BacktrackTo(data, backtrackPosition);
 
 			// Optional
 			AstNode* nestedNameSpecifier = GenerateNoSuccessAstNode();
-			if (MatchBeforeSemicolon(TokenType::COLON, TokenType::COLON))
+			if (MatchBeforeSemicolon(data, TokenType::COLON, TokenType::COLON))
 			{
 				FreeNode(nestedNameSpecifier);
-				nestedNameSpecifier = ParseNestedNameSpecifier();
+				nestedNameSpecifier = ParseNestedNameSpecifier(data);
 			}
-			AstNode* className = ParseClassName();
+			AstNode* className = ParseClassName(data);
 			if (className->success)
 			{
 				return GenerateDeclaratorIdNode(nestedNameSpecifier, className);
@@ -6626,48 +6673,48 @@ namespace CppParser
 
 			FreeNode(nestedNameSpecifier);
 			FreeNode(className);
-			BacktrackTo(backtrackPosition);
+			BacktrackTo(data, backtrackPosition);
 			return GenerateNoSuccessAstNode();
 		}
 
 		// dcl.name
-		static AstNode* ParseTypeId()
+		static AstNode* ParseTypeId(ParserData& data)
 		{
-			int backtrackPosition = CurrentToken;
-			AstNode* typeSpecifierSequence = ParseTypeSpecifierSequence();
+			int backtrackPosition = data.CurrentToken;
+			AstNode* typeSpecifierSequence = ParseTypeSpecifierSequence(data);
 			if (!typeSpecifierSequence->success)
 			{
 				FreeNode(typeSpecifierSequence);
-				BacktrackTo(backtrackPosition);
+				BacktrackTo(data, backtrackPosition);
 				return GenerateNoSuccessAstNode();
 			}
 
 			// Optional
-			AstNode* abstractDeclarator = ParseAbstractDeclarator();
+			AstNode* abstractDeclarator = ParseAbstractDeclarator(data);
 			return GenerateTypeIdNode(typeSpecifierSequence, abstractDeclarator);
 		}
 
-		static AstNode* ParseAbstractDeclarator()
+		static AstNode* ParseAbstractDeclarator(ParserData& data)
 		{
-			int backtrackPosition = CurrentToken;
-			if (Match(TokenType::DOT))
+			int backtrackPosition = data.CurrentToken;
+			if (Match(data, TokenType::DOT))
 			{
-				if (Match(TokenType::DOT))
+				if (Match(data, TokenType::DOT))
 				{
-					if (Match(TokenType::DOT))
+					if (Match(data, TokenType::DOT))
 					{
 						return GenerateAbstractElipsisDeclaratorNode();
 					}
 				}
 			}
-			BacktrackTo(backtrackPosition);
+			BacktrackTo(data, backtrackPosition);
 
 			// Optional
-			AstNode* noptrAbstractDeclarator = ParseNoptrAbstractDeclarator();
-			AstNode* parametersAndQualifiers = ParseParametersAndQualifiers();
+			AstNode* noptrAbstractDeclarator = ParseNoptrAbstractDeclarator(data);
+			AstNode* parametersAndQualifiers = ParseParametersAndQualifiers(data);
 			if (parametersAndQualifiers->success)
 			{
-				AstNode* trailingReturnType = ParseTrailingReturnType();
+				AstNode* trailingReturnType = ParseTrailingReturnType(data);
 				if (trailingReturnType->success)
 				{
 					return GenerateAbstractDeclaratorNode(noptrAbstractDeclarator, parametersAndQualifiers, trailingReturnType);
@@ -6676,145 +6723,145 @@ namespace CppParser
 			}
 			FreeNode(noptrAbstractDeclarator);
 			FreeNode(parametersAndQualifiers);
-			BacktrackTo(backtrackPosition);
+			BacktrackTo(data, backtrackPosition);
 
-			AstNode* ptrAbstractDeclarator = ParsePtrAbstractDeclarator();
+			AstNode* ptrAbstractDeclarator = ParsePtrAbstractDeclarator(data);
 			if (ptrAbstractDeclarator->success)
 			{
 				return ptrAbstractDeclarator;
 			}
 
 			FreeNode(ptrAbstractDeclarator);
-			BacktrackTo(backtrackPosition);
+			BacktrackTo(data, backtrackPosition);
 			return GenerateNoSuccessAstNode();
 		}
 
-		static AstNode* ParsePtrAbstractDeclarator()
+		static AstNode* ParsePtrAbstractDeclarator(ParserData& data)
 		{
-			int backtrackPosition = CurrentToken;
-			AstNode* ptrOperator = ParsePtrOperator();
+			int backtrackPosition = data.CurrentToken;
+			AstNode* ptrOperator = ParsePtrOperator(data);
 			if (ptrOperator->success)
 			{
 				// Optional
-				AstNode* ptrAbstractDeclarator = ParsePtrAbstractDeclarator();
+				AstNode* ptrAbstractDeclarator = ParsePtrAbstractDeclarator(data);
 				return GeneratePtrAbstractDeclaratorNode(ptrOperator, ptrAbstractDeclarator);
 			}
 			FreeNode(ptrOperator);
-			BacktrackTo(backtrackPosition);
+			BacktrackTo(data, backtrackPosition);
 
-			return ParseNoptrAbstractDeclarator();
+			return ParseNoptrAbstractDeclarator(data);
 		}
 
-		static AstNode* ParseNoptrAbstractDeclarator()
+		static AstNode* ParseNoptrAbstractDeclarator(ParserData& data)
 		{
 			// TODO: Not sure if this will work right...?
-			int backtrackPosition = CurrentToken;
+			int backtrackPosition = data.CurrentToken;
 			AstNode* ptrAbstractDeclarator = GenerateNoSuccessAstNode();
-			if (Match(TokenType::LEFT_PAREN))
+			if (Match(data, TokenType::LEFT_PAREN))
 			{
-				ptrAbstractDeclarator = ParsePtrAbstractDeclarator();
+				ptrAbstractDeclarator = ParsePtrAbstractDeclarator(data);
 				if (!ptrAbstractDeclarator->success)
 				{
 					FreeNode(ptrAbstractDeclarator);
-					BacktrackTo(backtrackPosition);
+					BacktrackTo(data, backtrackPosition);
 				}
-				Consume(TokenType::RIGHT_PAREN);
+				Consume(data, TokenType::RIGHT_PAREN);
 			}
 
-			if (Match(TokenType::LEFT_BRACKET))
+			if (Match(data, TokenType::LEFT_BRACKET))
 			{
-				AstNode* constantExpression = ParseConstantExpression();
+				AstNode* constantExpression = ParseConstantExpression(data);
 				if (!constantExpression->success)
 				{
 					FreeNode(constantExpression);
 					FreeNode(ptrAbstractDeclarator);
-					BacktrackTo(backtrackPosition);
+					BacktrackTo(data, backtrackPosition);
 					return GenerateNoSuccessAstNode();
 				}
-				AstNode* attributeSpecifierSeq = ParseAttributeSpecifierSequence();
-				return GenerateNoptrAbstractExpressionDeclaratorNode(ptrAbstractDeclarator, constantExpression, attributeSpecifierSeq, ParseNoptrAbstractDeclarator());
+				AstNode* attributeSpecifierSeq = ParseAttributeSpecifierSequence(data);
+				return GenerateNoptrAbstractExpressionDeclaratorNode(ptrAbstractDeclarator, constantExpression, attributeSpecifierSeq, ParseNoptrAbstractDeclarator(data));
 			}
 
-			AstNode* parametersAndQualifiers = ParseParametersAndQualifiers();
+			AstNode* parametersAndQualifiers = ParseParametersAndQualifiers(data);
 			if (parametersAndQualifiers->success)
 			{
-				return GenerateNoptrAbstractDeclaratorNode(ptrAbstractDeclarator, parametersAndQualifiers, ParseNoptrAbstractDeclarator());
+				return GenerateNoptrAbstractDeclaratorNode(ptrAbstractDeclarator, parametersAndQualifiers, ParseNoptrAbstractDeclarator(data));
 			}
 
 			FreeNode(parametersAndQualifiers);
-			BacktrackTo(backtrackPosition);
+			BacktrackTo(data, backtrackPosition);
 			return GenerateNoSuccessAstNode();
 		}
 
 		// dcl.fct
-		static AstNode* ParseParameterDeclarationClause()
+		static AstNode* ParseParameterDeclarationClause(ParserData& data)
 		{
 			// Optional
-			AstNode* parameterDeclarationList = ParseParameterDeclarationList();
+			AstNode* parameterDeclarationList = ParseParameterDeclarationList(data);
 			if (parameterDeclarationList->success)
 			{
-				if (Match(TokenType::COMMA))
+				if (Match(data, TokenType::COMMA))
 				{
-					if (Match(TokenType::DOT))
+					if (Match(data, TokenType::DOT))
 					{
-						Consume(TokenType::DOT);
-						Consume(TokenType::DOT);
+						Consume(data, TokenType::DOT);
+						Consume(data, TokenType::DOT);
 					}
 				}
 				return parameterDeclarationList;
 			}
 
-			if (Match(TokenType::DOT))
+			if (Match(data, TokenType::DOT))
 			{
-				Consume(TokenType::DOT);
-				Consume(TokenType::DOT);
+				Consume(data, TokenType::DOT);
+				Consume(data, TokenType::DOT);
 			}
 
 			return parameterDeclarationList;
 		}
 
-		static AstNode* ParseParameterDeclarationList()
+		static AstNode* ParseParameterDeclarationList(ParserData& data)
 		{
-			int backtrackPosition = CurrentToken;
-			AstNode* result = ParseParameterDeclaration();
+			int backtrackPosition = data.CurrentToken;
+			AstNode* result = ParseParameterDeclaration(data);
 			if (!result->success)
 			{
 				FreeNode(result);
-				BacktrackTo(backtrackPosition);
+				BacktrackTo(data, backtrackPosition);
 				return GenerateNoSuccessAstNode();
 			}
 
-			while (Match(TokenType::COMMA))
+			while (Match(data, TokenType::COMMA))
 			{
-				AstNode* nextParameter = ParseParameterDeclarationList();
+				AstNode* nextParameter = ParseParameterDeclarationList(data);
 				result = GenerateParameterDeclarationListNode(result, nextParameter);
 			}
 
 			return result;
 		}
 
-		static AstNode* ParseParameterDeclaration()
+		static AstNode* ParseParameterDeclaration(ParserData& data)
 		{
-			int backtrackPosition = CurrentToken;
+			int backtrackPosition = data.CurrentToken;
 			// Optional
-			AstNode* attributeSpecifierSeq = ParseAttributeSpecifierSequence();
-			AstNode* declSpecifierSeq = ParseDeclarationSpecifierSequence();
+			AstNode* attributeSpecifierSeq = ParseAttributeSpecifierSequence(data);
+			AstNode* declSpecifierSeq = ParseDeclarationSpecifierSequence(data);
 			if (declSpecifierSeq->success)
 			{
-				int backtrackPosition2 = CurrentToken;
-				AstNode* declarator = ParseDeclarator();
+				int backtrackPosition2 = data.CurrentToken;
+				AstNode* declarator = ParseDeclarator(data);
 				if (declarator->success)
 				{
-					if (Match(TokenType::EQUAL))
+					if (Match(data, TokenType::EQUAL))
 					{
-						AstNode* initializerClause = ParseInitializerClause();
+						AstNode* initializerClause = ParseInitializerClause(data);
 						if (!initializerClause->success)
 						{
 							FreeNode(initializerClause);
 							FreeNode(declarator);
 							FreeNode(attributeSpecifierSeq);
 							FreeNode(declSpecifierSeq);
-							BacktrackTo(backtrackPosition);
+							BacktrackTo(data, backtrackPosition);
 							return GenerateNoSuccessAstNode();
 						}
 
@@ -6824,20 +6871,20 @@ namespace CppParser
 					return GenerateParameterDeclarationNode(attributeSpecifierSeq, declSpecifierSeq, declarator);
 				}
 				FreeNode(declarator);
-				BacktrackTo(backtrackPosition2);
+				BacktrackTo(data, backtrackPosition2);
 
 				// Optional
-				AstNode* abstractDeclarator = ParseAbstractDeclarator();
-				if (Match(TokenType::EQUAL))
+				AstNode* abstractDeclarator = ParseAbstractDeclarator(data);
+				if (Match(data, TokenType::EQUAL))
 				{
-					AstNode* initializerClause = ParseInitializerClause();
+					AstNode* initializerClause = ParseInitializerClause(data);
 					if (!initializerClause->success)
 					{
 						FreeNode(initializerClause);
 						FreeNode(abstractDeclarator);
 						FreeNode(attributeSpecifierSeq);
 						FreeNode(declSpecifierSeq);
-						BacktrackTo(backtrackPosition);
+						BacktrackTo(data, backtrackPosition);
 						return GenerateNoSuccessAstNode();
 					}
 
@@ -6849,49 +6896,49 @@ namespace CppParser
 
 			FreeNode(attributeSpecifierSeq);
 			FreeNode(declSpecifierSeq);
-			BacktrackTo(backtrackPosition);
+			BacktrackTo(data, backtrackPosition);
 			return GenerateNoSuccessAstNode();
 		}
 
 		// Functions
-		static AstNode* ParseFunctionDefinition()
+		static AstNode* ParseFunctionDefinition(ParserData& data)
 		{
-			int backtrackPosition = CurrentToken;
+			int backtrackPosition = data.CurrentToken;
 			// Optional
-			AstNode* attributeSpecifierSeq = ParseAttributeSpecifierSequence();
-			AstNode* declSpecifierSeq = ParseDeclarationSpecifierSequence();
-			AstNode* declarator = ParseDeclarator();
+			AstNode* attributeSpecifierSeq = ParseAttributeSpecifierSequence(data);
+			AstNode* declSpecifierSeq = ParseDeclarationSpecifierSequence(data);
+			AstNode* declarator = ParseDeclarator(data);
 			if (!declarator->success)
 			{
 				FreeNode(attributeSpecifierSeq);
 				FreeNode(declSpecifierSeq);
 				FreeNode(declarator);
-				BacktrackTo(backtrackPosition);
+				BacktrackTo(data, backtrackPosition);
 				return GenerateNoSuccessAstNode();
 			}
 
-			if (Match(TokenType::EQUAL))
+			if (Match(data, TokenType::EQUAL))
 			{
-				if (Match(TokenType::KW_DEFAULT))
+				if (Match(data, TokenType::KW_DEFAULT))
 				{
-					Consume(TokenType::SEMICOLON);
+					Consume(data, TokenType::SEMICOLON);
 					return GenerateFunctionDefaultDefinitionNode(attributeSpecifierSeq, declSpecifierSeq, declarator, AutoFunctionType::Default);
 				}
 
-				if (Match(TokenType::KW_DELETE))
+				if (Match(data, TokenType::KW_DELETE))
 				{
-					Consume(TokenType::SEMICOLON);
+					Consume(data, TokenType::SEMICOLON);
 					return GenerateFunctionDefaultDefinitionNode(attributeSpecifierSeq, declSpecifierSeq, declarator, AutoFunctionType::Delete);
 				}
 
 				FreeNode(attributeSpecifierSeq);
 				FreeNode(declSpecifierSeq);
 				FreeNode(declarator);
-				BacktrackTo(backtrackPosition);
+				BacktrackTo(data, backtrackPosition);
 				return GenerateNoSuccessAstNode();
 			}
 
-			AstNode* functionBody = ParseFunctionBody();
+			AstNode* functionBody = ParseFunctionBody(data);
 			if (functionBody->success)
 			{
 				return GenerateFunctionDefinitionNode(attributeSpecifierSeq, declSpecifierSeq, declarator, functionBody);
@@ -6901,24 +6948,24 @@ namespace CppParser
 			FreeNode(attributeSpecifierSeq);
 			FreeNode(declSpecifierSeq);
 			FreeNode(declarator);
-			BacktrackTo(backtrackPosition);
+			BacktrackTo(data, backtrackPosition);
 			return GenerateNoSuccessAstNode();
 		}
 
-		static AstNode* ParseFunctionBody()
+		static AstNode* ParseFunctionBody(ParserData& data)
 		{
-			int backtrackPosition = CurrentToken;
-			AstNode* functionTryBlock = ParseFunctionTryBlock();
+			int backtrackPosition = data.CurrentToken;
+			AstNode* functionTryBlock = ParseFunctionTryBlock(data);
 			if (functionTryBlock->success)
 			{
 				return functionTryBlock;
 			}
 			FreeNode(functionTryBlock);
-			BacktrackTo(backtrackPosition);
+			BacktrackTo(data, backtrackPosition);
 
 			// Optional
-			AstNode* ctorInitializer = ParseCtorInitializer();
-			AstNode* compoundStatement = ParseCompoundStatement();
+			AstNode* ctorInitializer = ParseCtorInitializer(data);
+			AstNode* compoundStatement = ParseCompoundStatement(data);
 			if (compoundStatement->success)
 			{
 				return GenerateFunctionBodyNode(ctorInitializer, compoundStatement);
@@ -6926,103 +6973,103 @@ namespace CppParser
 
 			FreeNode(ctorInitializer);
 			FreeNode(compoundStatement);
-			BacktrackTo(backtrackPosition);
+			BacktrackTo(data, backtrackPosition);
 			return GenerateNoSuccessAstNode();
 		}
 
 		// Init
-		static AstNode* ParseInitializer()
+		static AstNode* ParseInitializer(ParserData& data)
 		{
-			if (Match(TokenType::LEFT_PAREN))
+			if (Match(data, TokenType::LEFT_PAREN))
 			{
-				AstNode* expressionList = ParseExpressionList();
-				Consume(TokenType::RIGHT_PAREN);
+				AstNode* expressionList = ParseExpressionList(data);
+				Consume(data, TokenType::RIGHT_PAREN);
 				return expressionList;
 			}
 
-			return ParseBraceOrEqualInitializer();
+			return ParseBraceOrEqualInitializer(data);
 		}
 
-		static AstNode* ParseBraceOrEqualInitializer()
+		static AstNode* ParseBraceOrEqualInitializer(ParserData& data)
 		{
-			int backtrackPosition = CurrentToken;
-			if (Match(TokenType::EQUAL))
+			int backtrackPosition = data.CurrentToken;
+			if (Match(data, TokenType::EQUAL))
 			{
-				AstNode* result = ParseInitializerClause();
+				AstNode* result = ParseInitializerClause(data);
 				if (result->success)
 				{
 					return result;
 				}
 				FreeNode(result);
-				BacktrackTo(backtrackPosition);
+				BacktrackTo(data, backtrackPosition);
 			}
 
-			return ParseBracedInitList();
+			return ParseBracedInitList(data);
 		}
 
-		static AstNode* ParseInitializerClause()
+		static AstNode* ParseInitializerClause(ParserData& data)
 		{
-			int backtrackPosition = CurrentToken;
-			AstNode* bracedInitList = ParseBracedInitList();
+			int backtrackPosition = data.CurrentToken;
+			AstNode* bracedInitList = ParseBracedInitList(data);
 			if (bracedInitList->success)
 			{
 				return bracedInitList;
 			}
 			FreeNode(bracedInitList);
-			BacktrackTo(backtrackPosition);
+			BacktrackTo(data, backtrackPosition);
 
-			AstNode* assignmentExpression = ParseAssignmentExpression();
+			AstNode* assignmentExpression = ParseAssignmentExpression(data);
 			if (assignmentExpression->success)
 			{
 				return assignmentExpression;
 			}
 			FreeNode(assignmentExpression);
-			BacktrackTo(backtrackPosition);
+			BacktrackTo(data, backtrackPosition);
 
 			return GenerateNoSuccessAstNode();
 		}
 
-		static AstNode* ParseInitializerList()
+		static AstNode* ParseInitializerList(ParserData& data)
 		{
-			int backtrackPosition = CurrentToken;
-			AstNode* result = ParseInitializerClause();
+			int backtrackPosition = data.CurrentToken;
+			AstNode* result = ParseInitializerClause(data);
 			if (!result->success)
 			{
 				FreeNode(result);
-				BacktrackTo(backtrackPosition);
+				BacktrackTo(data, backtrackPosition);
 				return GenerateNoSuccessAstNode();
 			}
 
 			AstNode* nextInitList = nullptr;
-			if (Match(TokenType::COMMA))
+			if (Match(data, TokenType::COMMA))
 			{
-				nextInitList = ParseInitializerList();
+				nextInitList = ParseInitializerList(data);
 			}
 			else
 			{
 				nextInitList = GenerateNoSuccessAstNode();
 			}
 
-			bool hasElipsis = Match(TokenType::DOT);
+			bool hasElipsis = Match(data, TokenType::DOT);
 			if (hasElipsis)
 			{
-				Consume(TokenType::DOT);
-				Consume(TokenType::DOT);
+				Consume(data, TokenType::DOT);
+				Consume(data, TokenType::DOT);
 			}
 
 			return GenerateInitializerListNode(result, nextInitList);
 		}
 
-		static AstNode* ParseBracedInitList()
+		static AstNode* ParseBracedInitList(ParserData& data)
 		{
-			int backtrackPosition = CurrentToken;
-			if (Match(TokenType::LEFT_CURLY_BRACKET))
+			int backtrackPosition = data.CurrentToken;
+			if (Match(data, TokenType::LEFT_CURLY_BRACKET))
 			{
-				AstNode* initializerList = ParseInitializerList();
+				AstNode* initializerList = ParseInitializerList(data);
 				if (initializerList->success)
 				{
-					bool trailingComma = Match(TokenType::COMMA);
-					if (Match(TokenType::RIGHT_CURLY_BRACKET))
+					bool trailingComma = Match(data, TokenType::COMMA);
+					if (Match(data, TokenType::RIGHT_CURLY_BRACKET))
 					{
 						return GenerateBracedInitListNode(initializerList);
 					}
@@ -7030,110 +7077,110 @@ namespace CppParser
 				FreeNode(initializerList);
 			}
 
-			BacktrackTo(backtrackPosition);
+			BacktrackTo(data, backtrackPosition);
 			return GenerateNoSuccessAstNode();
 		}
 
 		// Classes
-		static AstNode* ParseClassName()
+		static AstNode* ParseClassName(ParserData& data)
 		{
-			if (Peek() == TokenType::IDENTIFIER)
+			if (Peek(data) == TokenType::IDENTIFIER)
 			{
-				return GenerateClassNameNode(ConsumeCurrent(TokenType::IDENTIFIER));
+				return GenerateClassNameNode(ConsumeCurrent(data, TokenType::IDENTIFIER));
 			}
 
-			return ParseSimpleTemplateId();
+			return ParseSimpleTemplateId(data);
 		}
 
-		static AstNode* ParseClassSpecifier()
+		static AstNode* ParseClassSpecifier(ParserData& data)
 		{
-			int backtrackPosition = CurrentToken;
-			AstNode* classHead = ParseClassHead();
+			int backtrackPosition = data.CurrentToken;
+			AstNode* classHead = ParseClassHead(data);
 			if (!classHead->success)
 			{
 				FreeNode(classHead);
-				BacktrackTo(backtrackPosition);
+				BacktrackTo(data, backtrackPosition);
 				return GenerateNoSuccessAstNode();
 			}
 
-			Consume(TokenType::LEFT_CURLY_BRACKET);
+			Consume(data, TokenType::LEFT_CURLY_BRACKET);
 			// Optional
-			AstNode* memberSpecification = ParseMemberSpecification();
-			Consume(TokenType::RIGHT_CURLY_BRACKET);
+			AstNode* memberSpecification = ParseMemberSpecification(data);
+			Consume(data, TokenType::RIGHT_CURLY_BRACKET);
 
 			return GenerateClassSpecifierNode(classHead, memberSpecification);
 		}
 
-		static AstNode* ParseClassHead()
+		static AstNode* ParseClassHead(ParserData& data)
 		{
-			int backtrackPosition = CurrentToken;
-			AstNode* classKey = ParseClassKey();
+			int backtrackPosition = data.CurrentToken;
+			AstNode* classKey = ParseClassKey(data);
 			if (!classKey->success)
 			{
 				FreeNode(classKey);
-				BacktrackTo(backtrackPosition);
+				BacktrackTo(data, backtrackPosition);
 				return GenerateNoSuccessAstNode();
 			}
 
 			// Optional
-			AstNode* attributeSpecifierSeq = ParseAttributeSpecifierSequence();
+			AstNode* attributeSpecifierSeq = ParseAttributeSpecifierSequence(data);
 
-			backtrackPosition = CurrentToken;
-			AstNode* classHeadName = ParseClassHeadName();
+			backtrackPosition = data.CurrentToken;
+			AstNode* classHeadName = ParseClassHeadName(data);
 			if (classHeadName->success)
 			{
 				// Optional
-				AstNode* classVirtSpecifierSeq = ParseClassVirtSpecifierSequence();
+				AstNode* classVirtSpecifierSeq = ParseClassVirtSpecifierSequence(data);
 				// Optional
-				AstNode* baseClause = ParseBaseClause();
+				AstNode* baseClause = ParseBaseClause(data);
 				return GenerateClassVirtualHeadNode(classKey, attributeSpecifierSeq, classHeadName, classVirtSpecifierSeq, baseClause);
 			}
 			FreeNode(classHeadName);
-			BacktrackTo(backtrackPosition);
+			BacktrackTo(data, backtrackPosition);
 
 			// Optional
-			AstNode* baseClause = ParseBaseClause();
+			AstNode* baseClause = ParseBaseClause(data);
 			return GenerateClassHeadNode(classKey, attributeSpecifierSeq, baseClause);
 		}
 
-		static AstNode* ParseClassHeadName()
+		static AstNode* ParseClassHeadName(ParserData& data)
 		{
-			int backtrackPosition = CurrentToken;
+			int backtrackPosition = data.CurrentToken;
 			// Optional
 			AstNode* nestedNameSpecifier = GenerateNoSuccessAstNode();
-			if (MatchBeforeSemicolon(TokenType::COLON, TokenType::COLON))
+			if (MatchBeforeSemicolon(data, TokenType::COLON, TokenType::COLON))
 			{
 				// Make sure there's a chance of a nested name before blindly consuming it
 				FreeNode(nestedNameSpecifier);
-				nestedNameSpecifier = ParseNestedNameSpecifier();
+				nestedNameSpecifier = ParseNestedNameSpecifier(data);
 			}
 
-			AstNode* className = ParseClassName();
+			AstNode* className = ParseClassName(data);
 			if (!className->success)
 			{
 				FreeNode(nestedNameSpecifier);
 				FreeNode(className);
-				BacktrackTo(backtrackPosition);
+				BacktrackTo(data, backtrackPosition);
 				return GenerateNoSuccessAstNode();
 			}
 
 			return GenerateClassHeadNameNode(nestedNameSpecifier, className);
 		}
 
-		static AstNode* ParseClassVirtSpecifierSequence()
+		static AstNode* ParseClassVirtSpecifierSequence(ParserData& data)
 		{
-			int backtrackPosition = CurrentToken;
-			AstNode* result = ParseClassVirtSpecifier();
+			int backtrackPosition = data.CurrentToken;
+			AstNode* result = ParseClassVirtSpecifier(data);
 			if (!result->success)
 			{
 				FreeNode(result);
-				BacktrackTo(backtrackPosition);
+				BacktrackTo(data, backtrackPosition);
 				return GenerateNoSuccessAstNode();
 			}
 
 			while (true)
 			{
-				AstNode* nextSpec = ParseClassVirtSpecifierSequence();
+				AstNode* nextSpec = ParseClassVirtSpecifierSequence(data);
 				result = GenerateClassVirtSpecifierSeqNode(result, nextSpec);
 				if (!nextSpec->success)
 				{
@@ -7144,22 +7191,22 @@ namespace CppParser
 			return result;
 		}
 
-		static AstNode* ParseClassVirtSpecifier()
+		static AstNode* ParseClassVirtSpecifier(ParserData& data)
 		{
-			if (Peek() == TokenType::KW_FINAL || Peek() == TokenType::KW_EXPLICIT)
+			if (Peek(data) == TokenType::KW_FINAL || Peek(data) == TokenType::KW_EXPLICIT)
 			{
-				Token token = ConsumeCurrent(Peek());
+				Token token = ConsumeCurrent(data, Peek(data));
 				return GenerateClassVirtSpecifierNode(token);
 			}
 
 			return GenerateNoSuccessAstNode();
 		}
 
-		static AstNode* ParseClassKey()
+		static AstNode* ParseClassKey(ParserData& data)
 		{
-			if (Peek() == TokenType::KW_CLASS || Peek() == TokenType::KW_STRUCT || Peek() == TokenType::KW_UNION)
+			if (Peek(data) == TokenType::KW_CLASS || Peek(data) == TokenType::KW_STRUCT || Peek(data) == TokenType::KW_UNION)
 			{
-				Token token = ConsumeCurrent(Peek());
+				Token token = ConsumeCurrent(data, Peek(data));
 				return GenerateClassKeyNode(token);
 			}
 
@@ -7167,108 +7214,108 @@ namespace CppParser
 		}
 
 		// Class Members
-		static AstNode* ParseMemberSpecification()
+		static AstNode* ParseMemberSpecification(ParserData& data)
 		{
-			int backtrackPosition = CurrentToken;
-			AstNode* accessSpecifier = ParseAccessSpecifier();
+			int backtrackPosition = data.CurrentToken;
+			AstNode* accessSpecifier = ParseAccessSpecifier(data);
 			if (accessSpecifier->success)
 			{
-				Consume(TokenType::COLON);
+				Consume(data, TokenType::COLON);
 				// Optional
-				AstNode* memberSpecification = ParseMemberSpecification();
+				AstNode* memberSpecification = ParseMemberSpecification(data);
 				return GenerateMemberAndAccessSpecifierNode(accessSpecifier, memberSpecification);
 			}
 			FreeNode(accessSpecifier);
-			BacktrackTo(backtrackPosition);
+			BacktrackTo(data, backtrackPosition);
 
-			AstNode* memberDeclaration = ParseMemberDeclaration();
+			AstNode* memberDeclaration = ParseMemberDeclaration(data);
 			if (memberDeclaration->success)
 			{
 				// Optional
-				AstNode* memberSpecification = ParseMemberSpecification();
+				AstNode* memberSpecification = ParseMemberSpecification(data);
 				return GenerateMemberSpecifierNode(memberDeclaration, memberSpecification);
 			}
 
 			FreeNode(memberDeclaration);
-			BacktrackTo(backtrackPosition);
+			BacktrackTo(data, backtrackPosition);
 			return GenerateNoSuccessAstNode();
 		}
 
-		static AstNode* ParseMemberDeclaration()
+		static AstNode* ParseMemberDeclaration(ParserData& data)
 		{
 			// TODO: Does this really work right...?
-			int backtrackPosition = CurrentToken;
-			AstNode* functionDefinition = ParseFunctionDefinition();
+			int backtrackPosition = data.CurrentToken;
+			AstNode* functionDefinition = ParseFunctionDefinition(data);
 			if (functionDefinition->success)
 			{
-				bool trailingSemicolon = Match(TokenType::SEMICOLON);
+				bool trailingSemicolon = Match(data, TokenType::SEMICOLON);
 				return GenerateMemberFunctionDeclarationNode(functionDefinition, trailingSemicolon);
 			}
 			FreeNode(functionDefinition);
-			BacktrackTo(backtrackPosition);
+			BacktrackTo(data, backtrackPosition);
 
-			AstNode* usingDeclaration = ParseUsingDeclaration();
+			AstNode* usingDeclaration = ParseUsingDeclaration(data);
 			if (usingDeclaration->success)
 			{
 				return usingDeclaration;
 			}
 			FreeNode(usingDeclaration);
-			BacktrackTo(backtrackPosition);
+			BacktrackTo(data, backtrackPosition);
 
-			AstNode* staticAssertDeclaration = ParseStaticAssertDeclaration();
+			AstNode* staticAssertDeclaration = ParseStaticAssertDeclaration(data);
 			if (staticAssertDeclaration->success)
 			{
 				return staticAssertDeclaration;
 			}
 			FreeNode(staticAssertDeclaration);
-			BacktrackTo(backtrackPosition);
+			BacktrackTo(data, backtrackPosition);
 
-			AstNode* templateDeclaration = ParseTemplateDeclaration();
+			AstNode* templateDeclaration = ParseTemplateDeclaration(data);
 			if (templateDeclaration->success)
 			{
 				return templateDeclaration;
 			}
 			FreeNode(templateDeclaration);
-			BacktrackTo(backtrackPosition);
+			BacktrackTo(data, backtrackPosition);
 
-			AstNode* aliasDeclaration = ParseAliasDeclaration();
+			AstNode* aliasDeclaration = ParseAliasDeclaration(data);
 			if (aliasDeclaration->success)
 			{
 				return aliasDeclaration;
 			}
 			FreeNode(aliasDeclaration);
-			BacktrackTo(backtrackPosition);
+			BacktrackTo(data, backtrackPosition);
 
 			// All optional except semicolon
-			AstNode* attributeSpecifierSeq = ParseAttributeSpecifierSequence();
-			AstNode* declSpecifierSeq = ParseDeclarationSpecifierSequence();
-			AstNode* memberDeclaratorList = ParseMemberDeclaratorList();
-			if (!Match(TokenType::SEMICOLON))
+			AstNode* attributeSpecifierSeq = ParseAttributeSpecifierSequence(data);
+			AstNode* declSpecifierSeq = ParseDeclarationSpecifierSequence(data);
+			AstNode* memberDeclaratorList = ParseMemberDeclaratorList(data);
+			if (!Match(data, TokenType::SEMICOLON))
 			{
 				FreeNode(attributeSpecifierSeq);
 				FreeNode(declSpecifierSeq);
 				FreeNode(memberDeclaratorList);
-				BacktrackTo(backtrackPosition);
+				BacktrackTo(data, backtrackPosition);
 				return GenerateNoSuccessAstNode();
 			}
 
 			return GenerateMemberDeclarationNode(attributeSpecifierSeq, declSpecifierSeq, memberDeclaratorList);
 		}
 
-		static AstNode* ParseMemberDeclaratorList()
+		static AstNode* ParseMemberDeclaratorList(ParserData& data)
 		{
-			int backtrackPosition = CurrentToken;
-			AstNode* result = ParseMemberDeclarator();
+			int backtrackPosition = data.CurrentToken;
+			AstNode* result = ParseMemberDeclarator(data);
 			if (!result->success)
 			{
 				FreeNode(result);
-				BacktrackTo(backtrackPosition);
+				BacktrackTo(data, backtrackPosition);
 				return GenerateNoSuccessAstNode();
 			}
 
 			while (true)
 			{
-				AstNode* nextDeclarator = ParseMemberDeclaratorList();
+				AstNode* nextDeclarator = ParseMemberDeclaratorList(data);
 				result = GenerateMemberDeclaratorListNode(result, nextDeclarator);
 				if (!nextDeclarator->success)
 				{
@@ -7279,77 +7326,77 @@ namespace CppParser
 			return result;
 		}
 
-		static AstNode* ParseMemberDeclarator()
+		static AstNode* ParseMemberDeclarator(ParserData& data)
 		{
-			int backtrackPosition = CurrentToken;
-			AstNode* declarator = ParseDeclarator();
+			int backtrackPosition = data.CurrentToken;
+			AstNode* declarator = ParseDeclarator(data);
 			if (declarator->success)
 			{
 				// Optional
-				AstNode* virtSpecifierSeq = ParseVirtSpecifierSequence();
+				AstNode* virtSpecifierSeq = ParseVirtSpecifierSequence(data);
 				// Also optional, but there's a chance we could be referring to a different node
-				int backtrackPosition2 = CurrentToken;
-				AstNode* pureSpecifier = ParsePureSpecifier();
+				int backtrackPosition2 = data.CurrentToken;
+				AstNode* pureSpecifier = ParsePureSpecifier(data);
 				if (pureSpecifier->success)
 				{
 					return GenerateMemberDeclaratorPureNode(declarator, virtSpecifierSeq, pureSpecifier);
 				}
 				FreeNode(pureSpecifier);
-				BacktrackTo(backtrackPosition2);
+				BacktrackTo(data, backtrackPosition2);
 				// Also optional, but this is the fallback if neither succeeds
-				AstNode* braceOrEqualInitializer = ParseBraceOrEqualInitializer();
+				AstNode* braceOrEqualInitializer = ParseBraceOrEqualInitializer(data);
 				return GenerateMemberDeclaratorBraceNode(declarator, virtSpecifierSeq, braceOrEqualInitializer);
 			}
 			FreeNode(declarator);
-			BacktrackTo(backtrackPosition);
+			BacktrackTo(data, backtrackPosition);
 
 			// Optional
 			Token identifier;
 			identifier.m_Type = TokenType::None;
-			if (Peek() == TokenType::IDENTIFIER)
+			if (Peek(data) == TokenType::IDENTIFIER)
 			{
-				identifier = ConsumeCurrent(TokenType::IDENTIFIER);
+				identifier = ConsumeCurrent(data, TokenType::IDENTIFIER);
 			}
 
 			// Optional
-			AstNode* attributeSpecifierSeq = ParseAttributeSpecifierSequence();
+			AstNode* attributeSpecifierSeq = ParseAttributeSpecifierSequence(data);
 			// Optional
-			AstNode* virtSpecifierSeq = ParseVirtSpecifierSequence();
-			if (!Match(TokenType::COLON))
+			AstNode* virtSpecifierSeq = ParseVirtSpecifierSequence(data);
+			if (!Match(data, TokenType::COLON))
 			{
 				FreeNode(attributeSpecifierSeq);
 				FreeNode(virtSpecifierSeq);
-				BacktrackTo(backtrackPosition);
+				BacktrackTo(data, backtrackPosition);
 				return GenerateNoSuccessAstNode();
 			}
 
-			AstNode* constantExpression = ParseConstantExpression();
+			AstNode* constantExpression = ParseConstantExpression(data);
 			if (!constantExpression->success)
 			{
 				FreeNode(attributeSpecifierSeq);
 				FreeNode(virtSpecifierSeq);
 				FreeNode(constantExpression);
-				BacktrackTo(backtrackPosition);
+				BacktrackTo(data, backtrackPosition);
 				return GenerateNoSuccessAstNode();
 			}
 
 			return GenerateMemberDeclaratorNode(identifier, attributeSpecifierSeq, virtSpecifierSeq, constantExpression);
 		}
 
-		static AstNode* ParseVirtSpecifierSequence()
+		static AstNode* ParseVirtSpecifierSequence(ParserData& data)
 		{
-			int backtrackPosition = CurrentToken;
-			AstNode* result = ParseVirtSpecifier();
+			int backtrackPosition = data.CurrentToken;
+			AstNode* result = ParseVirtSpecifier(data);
 			if (!result->success)
 			{
 				FreeNode(result);
-				BacktrackTo(backtrackPosition);
+				BacktrackTo(data, backtrackPosition);
 				return GenerateNoSuccessAstNode();
 			}
 
 			while (true)
 			{
-				AstNode* nextSpec = ParseVirtSpecifier();
+				AstNode* nextSpec = ParseVirtSpecifier(data);
 				result = GenerateVirtSpecifierSeqNode(result, nextSpec);
 				if (!nextSpec->success)
 				{
@@ -7360,25 +7407,25 @@ namespace CppParser
 			return result;
 		}
 
-		static AstNode* ParseVirtSpecifier()
+		static AstNode* ParseVirtSpecifier(ParserData& data)
 		{
-			if (Peek() == TokenType::KW_OVERRIDE || Peek() == TokenType::KW_FINAL || Peek() == TokenType::KW_NEW)
+			if (Peek(data) == TokenType::KW_OVERRIDE || Peek(data) == TokenType::KW_FINAL || Peek(data) == TokenType::KW_NEW)
 			{
-				Token token = ConsumeCurrent(Peek());
+				Token token = ConsumeCurrent(data, Peek(data));
 				return GenerateVirtSpecifierNode(token);
 			}
 
 			return GenerateNoSuccessAstNode();
 		}
 
-		static AstNode* ParsePureSpecifier()
+		static AstNode* ParsePureSpecifier(ParserData& data)
 		{
-			int backtrackPosition = CurrentToken;
-			if (Match(TokenType::EQUAL))
+			int backtrackPosition = data.CurrentToken;
+			if (Match(data, TokenType::EQUAL))
 			{
-				if (Peek() == TokenType::INTEGER_LITERAL)
+				if (Peek(data) == TokenType::INTEGER_LITERAL)
 				{
-					Token token = ConsumeCurrent(TokenType::INTEGER_LITERAL);
+					Token token = ConsumeCurrent(data, TokenType::INTEGER_LITERAL);
 					if (strcmp(token.m_Lexeme, "0") == 0)
 					{
 						return GeneratePureSpecifierNode();
@@ -7386,70 +7433,70 @@ namespace CppParser
 				}
 			}
 
-			BacktrackTo(backtrackPosition);
+			BacktrackTo(data, backtrackPosition);
 			return GenerateNoSuccessAstNode();
 		}
 
 		// Derived classes
-		static AstNode* ParseBaseClause()
+		static AstNode* ParseBaseClause(ParserData& data)
 		{
-			if (Match(TokenType::COLON))
+			if (Match(data, TokenType::COLON))
 			{
-				return ParseBaseSpecifierList();
+				return ParseBaseSpecifierList(data);
 			}
 
 			return GenerateNoSuccessAstNode();
 		}
 
-		static AstNode* ParseBaseSpecifierList()
+		static AstNode* ParseBaseSpecifierList(ParserData& data)
 		{
-			int backtrackPosition = CurrentToken;
-			AstNode* result = ParseBaseSpecifier();
+			int backtrackPosition = data.CurrentToken;
+			AstNode* result = ParseBaseSpecifier(data);
 			if (!result->success)
 			{
 				FreeNode(result);
-				BacktrackTo(backtrackPosition);
+				BacktrackTo(data, backtrackPosition);
 				return GenerateNoSuccessAstNode();
 			}
 
-			while (Match(TokenType::COMMA))
+			while (Match(data, TokenType::COMMA))
 			{
-				AstNode* nextBase = ParseBaseSpecifierList();
+				AstNode* nextBase = ParseBaseSpecifierList(data);
 				result = GenerateBaseSpecifierListNode(result, nextBase);
 			}
 
-			if (Match(TokenType::DOT))
+			if (Match(data, TokenType::DOT))
 			{
-				Consume(TokenType::DOT);
-				Consume(TokenType::DOT);
+				Consume(data, TokenType::DOT);
+				Consume(data, TokenType::DOT);
 			}
 
 			return result;
 		}
 
-		static AstNode* ParseBaseSpecifier()
+		static AstNode* ParseBaseSpecifier(ParserData& data)
 		{
 			// TODO: this is weird, make sure I didn't goof up here
-			int backtrackPosition = CurrentToken;
+			int backtrackPosition = data.CurrentToken;
 			// Optional
-			AstNode* attributeSpecifierSeq = ParseAttributeSpecifierSequence();
-			bool isVirtual = Match(TokenType::KW_VIRTUAL);
+			AstNode* attributeSpecifierSeq = ParseAttributeSpecifierSequence(data);
+			bool isVirtual = Match(data, TokenType::KW_VIRTUAL);
 
-			int backtrackPosition2 = CurrentToken;
-			AstNode* accessSpecifier = ParseAccessSpecifier();
+			int backtrackPosition2 = data.CurrentToken;
+			AstNode* accessSpecifier = ParseAccessSpecifier(data);
 			if (!accessSpecifier->success)
 			{
 				FreeNode(accessSpecifier);
-				BacktrackTo(backtrackPosition2);
+				BacktrackTo(data, backtrackPosition2);
 				accessSpecifier = GenerateNoSuccessAstNode();
 
 				if (!isVirtual)
 				{
-					isVirtual = Match(TokenType::KW_VIRTUAL);
+					isVirtual = Match(data, TokenType::KW_VIRTUAL);
 				}
 			}
 
-			AstNode* baseTypeSpecifier = ParseBaseTypeSpecifier();
+			AstNode* baseTypeSpecifier = ParseBaseTypeSpecifier(data);
 			if (baseTypeSpecifier->success)
 			{
 				return GenerateBaseSpecifierNode(attributeSpecifierSeq, isVirtual, accessSpecifier, baseTypeSpecifier);
@@ -7458,34 +7505,34 @@ namespace CppParser
 			FreeNode(baseTypeSpecifier);
 			FreeNode(accessSpecifier);
 			FreeNode(attributeSpecifierSeq);
-			BacktrackTo(backtrackPosition);
+			BacktrackTo(data, backtrackPosition);
 			return GenerateNoSuccessAstNode();
 		}
 
-		static AstNode* ParseClassOrDecltype()
+		static AstNode* ParseClassOrDecltype(ParserData& data)
 		{
-			int backtrackPosition = CurrentToken;
-			AstNode* decltypeSpecifier = ParseDecltypeSpecifier();
+			int backtrackPosition = data.CurrentToken;
+			AstNode* decltypeSpecifier = ParseDecltypeSpecifier(data);
 			if (decltypeSpecifier->success)
 			{
 				return decltypeSpecifier;
 			}
 			FreeNode(decltypeSpecifier);
-			BacktrackTo(backtrackPosition);
+			BacktrackTo(data, backtrackPosition);
 
-			if (Match(TokenType::COLON))
+			if (Match(data, TokenType::COLON))
 			{
-				Consume(TokenType::COLON);
+				Consume(data, TokenType::COLON);
 			}
 
 			// Optional
 			AstNode* nestedNameSpecifier = GenerateNoSuccessAstNode();
-			if (MatchBeforeSemicolon(TokenType::COLON, TokenType::COLON))
+			if (MatchBeforeSemicolon(data, TokenType::COLON, TokenType::COLON))
 			{
 				FreeNode(nestedNameSpecifier);
-				nestedNameSpecifier = ParseNestedNameSpecifier();
+				nestedNameSpecifier = ParseNestedNameSpecifier(data);
 			}
-			AstNode* className = ParseClassName();
+			AstNode* className = ParseClassName(data);
 			if (className->success)
 			{
 				return GenerateClassOrDecltypeNode(nestedNameSpecifier, className);
@@ -7493,20 +7540,20 @@ namespace CppParser
 
 			FreeNode(nestedNameSpecifier);
 			FreeNode(className);
-			BacktrackTo(backtrackPosition);
+			BacktrackTo(data, backtrackPosition);
 			return GenerateNoSuccessAstNode();
 		}
 
-		static AstNode* ParseBaseTypeSpecifier()
+		static AstNode* ParseBaseTypeSpecifier(ParserData& data)
 		{
-			return ParseClassOrDecltype();
+			return ParseClassOrDecltype(data);
 		}
 
-		static AstNode* ParseAccessSpecifier()
+		static AstNode* ParseAccessSpecifier(ParserData& data)
 		{
-			if (Peek() == TokenType::KW_PRIVATE || Peek() == TokenType::KW_PROTECTED || Peek() == TokenType::KW_PUBLIC)
+			if (Peek(data) == TokenType::KW_PRIVATE || Peek(data) == TokenType::KW_PROTECTED || Peek(data) == TokenType::KW_PUBLIC)
 			{
-				Token accessSpecifier = ConsumeCurrent(Peek());
+				Token accessSpecifier = ConsumeCurrent(data, Peek(data));
 				return GenerateAccessSpecifierNode(accessSpecifier);
 			}
 
@@ -7514,56 +7561,56 @@ namespace CppParser
 		}
 
 		// Class conversion functions
-		static AstNode* ParseConversionFunctionId()
+		static AstNode* ParseConversionFunctionId(ParserData& data)
 		{
-			if (Match(TokenType::KW_OPERATOR))
+			if (Match(data, TokenType::KW_OPERATOR))
 			{
-				AstNode* conversionTypeId = ParseConversionTypeId();
+				AstNode* conversionTypeId = ParseConversionTypeId(data);
 				return GenerateConversionFunctionIdNode(conversionTypeId);
 			}
 
 			return GenerateNoSuccessAstNode();
 		}
 
-		static AstNode* ParseConversionTypeId()
+		static AstNode* ParseConversionTypeId(ParserData& data)
 		{
-			int backtrackPosition = CurrentToken;
-			AstNode* typeSpecifierSeq = ParseTypeSpecifierSequence();
+			int backtrackPosition = data.CurrentToken;
+			AstNode* typeSpecifierSeq = ParseTypeSpecifierSequence(data);
 			if (!typeSpecifierSeq->success)
 			{
 				FreeNode(typeSpecifierSeq);
-				BacktrackTo(backtrackPosition);
+				BacktrackTo(data, backtrackPosition);
 				return GenerateNoSuccessAstNode();
 			}
 
 			// Optional
-			AstNode* conversionDeclarator = ParseConversionDeclarator();
+			AstNode* conversionDeclarator = ParseConversionDeclarator(data);
 			return GenerateConversionTypeIdNode(typeSpecifierSeq, conversionDeclarator);
 		}
 
-		static AstNode* ParseConversionDeclarator()
+		static AstNode* ParseConversionDeclarator(ParserData& data)
 		{
-			int backtrackPosition = CurrentToken;
-			AstNode* ptrOperator = ParsePtrOperator();
+			int backtrackPosition = data.CurrentToken;
+			AstNode* ptrOperator = ParsePtrOperator(data);
 			if (!ptrOperator->success)
 			{
 				FreeNode(ptrOperator);
-				BacktrackTo(backtrackPosition);
+				BacktrackTo(data, backtrackPosition);
 				return GenerateNoSuccessAstNode();
 			}
 
 			// Optional
-			AstNode* conversionDeclarator = ParseConversionDeclarator();
+			AstNode* conversionDeclarator = ParseConversionDeclarator(data);
 			return GenerateConversionDeclaratorNode(ptrOperator, conversionDeclarator);
 		}
 
 		// Class initializers
-		static AstNode* ParseCtorInitializer()
+		static AstNode* ParseCtorInitializer(ParserData& data)
 		{
-			int backtrackPosition = CurrentToken;
-			if (Match(TokenType::COLON))
+			int backtrackPosition = data.CurrentToken;
+			if (Match(data, TokenType::COLON))
 			{
-				AstNode* memInitializerList = ParseMemInitializerList();
+				AstNode* memInitializerList = ParseMemInitializerList(data);
 				if (memInitializerList->success)
 				{
 					return memInitializerList;
@@ -7571,24 +7618,24 @@ namespace CppParser
 				FreeNode(memInitializerList);
 			}
 
-			BacktrackTo(backtrackPosition);
+			BacktrackTo(data, backtrackPosition);
 			return GenerateNoSuccessAstNode();
 		}
 
-		static AstNode* ParseMemInitializerList()
+		static AstNode* ParseMemInitializerList(ParserData& data)
 		{
-			int backtrackPosition = CurrentToken;
-			AstNode* result = ParseMemInitializer();
+			int backtrackPosition = data.CurrentToken;
+			AstNode* result = ParseMemInitializer(data);
 			if (!result->success)
 			{
 				FreeNode(result);
-				BacktrackTo(backtrackPosition);
+				BacktrackTo(data, backtrackPosition);
 				return GenerateNoSuccessAstNode();
 			}
 
-			while (Match(TokenType::COMMA))
+			while (Match(data, TokenType::COMMA))
 			{
-				AstNode* nextInitializer = ParseMemInitializer();
+				AstNode* nextInitializer = ParseMemInitializer(data);
 				result = GenerateMemInitializerListNode(result, nextInitializer);
 				if (!nextInitializer->success)
 				{
@@ -7596,90 +7643,90 @@ namespace CppParser
 				}
 			}
 
-			if (Match(TokenType::DOT))
+			if (Match(data, TokenType::DOT))
 			{
-				Consume(TokenType::DOT);
-				Consume(TokenType::DOT);
+				Consume(data, TokenType::DOT);
+				Consume(data, TokenType::DOT);
 			}
 
 			return result;
 		}
 
-		static AstNode* ParseMemInitializer()
+		static AstNode* ParseMemInitializer(ParserData& data)
 		{
-			int backtrackPosition = CurrentToken;
-			AstNode* memInitializerId = ParseMemInitializerId();
+			int backtrackPosition = data.CurrentToken;
+			AstNode* memInitializerId = ParseMemInitializerId(data);
 			if (!memInitializerId->success)
 			{
 				FreeNode(memInitializerId);
-				BacktrackTo(backtrackPosition);
+				BacktrackTo(data, backtrackPosition);
 				return GenerateNoSuccessAstNode();
 			}
 
-			if (Match(TokenType::LEFT_PAREN))
+			if (Match(data, TokenType::LEFT_PAREN))
 			{
 				// Optional
-				AstNode* expressionList = ParseExpressionList();
-				Consume(TokenType::RIGHT_PAREN);
+				AstNode* expressionList = ParseExpressionList(data);
+				Consume(data, TokenType::RIGHT_PAREN);
 
 				return GenerateMemExpressionInitializerNode(memInitializerId, expressionList);
 			}
 
-			AstNode* bracedInitList = ParseBracedInitList();
+			AstNode* bracedInitList = ParseBracedInitList(data);
 			if (!bracedInitList->success)
 			{
 				FreeNode(memInitializerId);
 				FreeNode(bracedInitList);
-				BacktrackTo(backtrackPosition);
+				BacktrackTo(data, backtrackPosition);
 				return GenerateNoSuccessAstNode();
 			}
 
 			return GenerateMemBracedInitializerNode(memInitializerId, bracedInitList);
 		}
 
-		static AstNode* ParseMemInitializerId()
+		static AstNode* ParseMemInitializerId(ParserData& data)
 		{
-			int backtrackPosition = CurrentToken;
-			AstNode* classOrDecltype = ParseClassOrDecltype();
+			int backtrackPosition = data.CurrentToken;
+			AstNode* classOrDecltype = ParseClassOrDecltype(data);
 			if (classOrDecltype->success)
 			{
 				return classOrDecltype;
 			}
 			FreeNode(classOrDecltype);
-			BacktrackTo(backtrackPosition);
+			BacktrackTo(data, backtrackPosition);
 
-			if (Peek() == TokenType::IDENTIFIER)
+			if (Peek(data) == TokenType::IDENTIFIER)
 			{
-				return GenerateMemInitializerIdNode(ConsumeCurrent(TokenType::IDENTIFIER));
+				return GenerateMemInitializerIdNode(ConsumeCurrent(data, TokenType::IDENTIFIER));
 			}
 
 			return GenerateNoSuccessAstNode();
 		}
 
 		// Operator overloading
-		static OverloadableOperatorType ParseOverloadableOperator()
+		static OverloadableOperatorType ParseOverloadableOperator(ParserData& data)
 		{
-			if (Match(TokenType::KW_NEW))
+			if (Match(data, TokenType::KW_NEW))
 			{
-				if (Match(TokenType::LEFT_BRACKET))
+				if (Match(data, TokenType::LEFT_BRACKET))
 				{
-					Consume(TokenType::RIGHT_BRACKET);
+					Consume(data, TokenType::RIGHT_BRACKET);
 					return OverloadableOperatorType::NewArr;
 				}
 				return  OverloadableOperatorType::New;
 			}
 
-			if (Match(TokenType::KW_DELETE))
+			if (Match(data, TokenType::KW_DELETE))
 			{
-				if (Match(TokenType::LEFT_BRACKET))
+				if (Match(data, TokenType::LEFT_BRACKET))
 				{
-					Consume(TokenType::RIGHT_BRACKET);
+					Consume(data, TokenType::RIGHT_BRACKET);
 					return OverloadableOperatorType::DeleteArr;
 				}
 				return OverloadableOperatorType::Delete;
 			}
 
-			Token token = ConsumeCurrent(Peek());
+			Token token = ConsumeCurrent(data, Peek(data));
 			switch (token.m_Type)
 			{
 			case TokenType::PLUS:
@@ -7752,32 +7799,32 @@ namespace CppParser
 				return OverloadableOperatorType::Comma;
 			case TokenType::ARROW:
 			{
-				if (Match(TokenType::STAR))
+				if (Match(data, TokenType::STAR))
 				{
 					return OverloadableOperatorType::ArrowStar;
 				}
 				return OverloadableOperatorType::Arrow;
 			}
 			case TokenType::LEFT_PAREN:
-				Consume(TokenType::RIGHT_PAREN);
+				Consume(data, TokenType::RIGHT_PAREN);
 				return OverloadableOperatorType::ParenGroup;
 			case TokenType::LEFT_BRACKET:
-				Consume(TokenType::RIGHT_BRACKET);
+				Consume(data, TokenType::RIGHT_BRACKET);
 				return OverloadableOperatorType::BracketGroup;
 			}
 
 			return OverloadableOperatorType::None;
 		}
 
-		static AstNode* ParseOperatorFunctionId()
+		static AstNode* ParseOperatorFunctionId(ParserData& data)
 		{
-			if (Match(TokenType::KW_OPERATOR))
+			if (Match(data, TokenType::KW_OPERATOR))
 			{
-				OverloadableOperatorType op = ParseOverloadableOperator();
-				if (Match(TokenType::LEFT_ANGLE_BRACKET))
+				OverloadableOperatorType op = ParseOverloadableOperator(data);
+				if (Match(data, TokenType::LEFT_ANGLE_BRACKET))
 				{
-					AstNode* templateArgList = ParseTemplateArgumentList();
-					Consume(TokenType::RIGHT_ANGLE_BRACKET);
+					AstNode* templateArgList = ParseTemplateArgumentList(data);
+					Consume(data, TokenType::RIGHT_ANGLE_BRACKET);
 					return GenerateOperatorFunctionIdNode(op, templateArgList);
 				}
 
@@ -7788,43 +7835,43 @@ namespace CppParser
 		}
 
 		// Literal overrides
-		static AstNode* ParseLiteralOperatorId()
+		static AstNode* ParseLiteralOperatorId(ParserData& data)
 		{
-			int backtrackPosition = CurrentToken;
-			if (Match(TokenType::KW_OPERATOR))
+			int backtrackPosition = data.CurrentToken;
+			if (Match(data, TokenType::KW_OPERATOR))
 			{
-				if (Peek() == TokenType::STRING_LITERAL)
+				if (Peek(data) == TokenType::STRING_LITERAL)
 				{
-					Token token = ConsumeCurrent(TokenType::STRING_LITERAL);
+					Token token = ConsumeCurrent(data, TokenType::STRING_LITERAL);
 					Logger::Assert(ParserString::StringLength(token.m_Lexeme) == 0, "Invalid custom overloaded operator. Syntax is 'operator\"\" identifier'");
-					if (Peek() == TokenType::IDENTIFIER)
+					if (Peek(data) == TokenType::IDENTIFIER)
 					{
-						Token identifier = ConsumeCurrent(TokenType::IDENTIFIER);
+						Token identifier = ConsumeCurrent(data, TokenType::IDENTIFIER);
 						return GenerateLiteralOperatorIdNode(identifier);
 					}
 				}
 			}
 
-			BacktrackTo(backtrackPosition);
+			BacktrackTo(data, backtrackPosition);
 			return GenerateNoSuccessAstNode();
 		}
 
 		// Templates
-		static AstNode* ParseTemplateDeclaration()
+		static AstNode* ParseTemplateDeclaration(ParserData& data)
 		{
-			int backtrackPosition = CurrentToken;
-			if (Match(TokenType::KW_TEMPLATE))
+			int backtrackPosition = data.CurrentToken;
+			if (Match(data, TokenType::KW_TEMPLATE))
 			{
-				Consume(TokenType::LEFT_ANGLE_BRACKET);
-				AstNode* templateParameterList = ParseTemplateParameterList();
-				Consume(TokenType::RIGHT_ANGLE_BRACKET);
-				AstNode* declaration = ParseDeclaration();
+				Consume(data, TokenType::LEFT_ANGLE_BRACKET);
+				AstNode* templateParameterList = ParseTemplateParameterList(data);
+				Consume(data, TokenType::RIGHT_ANGLE_BRACKET);
+				AstNode* declaration = ParseDeclaration(data);
 
 				if (!(templateParameterList->success && declaration->success))
 				{
 					FreeNode(templateParameterList);
 					FreeNode(declaration);
-					BacktrackTo(backtrackPosition);
+					BacktrackTo(data, backtrackPosition);
 					return GenerateNoSuccessAstNode();
 				}
 
@@ -7834,76 +7881,76 @@ namespace CppParser
 			return GenerateNoSuccessAstNode();
 		}
 
-		static AstNode* ParseTemplateParameterList()
+		static AstNode* ParseTemplateParameterList(ParserData& data)
 		{
-			int backtrackPosition = CurrentToken;
-			AstNode* result = ParseTemplateParameter();
+			int backtrackPosition = data.CurrentToken;
+			AstNode* result = ParseTemplateParameter(data);
 			if (!result->success)
 			{
 				FreeNode(result);
-				BacktrackTo(backtrackPosition);
+				BacktrackTo(data, backtrackPosition);
 				return GenerateNoSuccessAstNode();
 			}
 
-			while (Match(TokenType::COMMA))
+			while (Match(data, TokenType::COMMA))
 			{
-				result = GenerateTemplateParameterListNode(result, ParseTemplateParameterList());
+				result = GenerateTemplateParameterListNode(result, ParseTemplateParameterList(data));
 			}
 
 			return GenerateTemplateParameterListNode(result, GenerateNoSuccessAstNode());
 		}
 
-		static AstNode* ParseTemplateParameter()
+		static AstNode* ParseTemplateParameter(ParserData& data)
 		{
-			int backtrackPosition = CurrentToken;
-			AstNode* typeParameter = ParseTypeParameter();
+			int backtrackPosition = data.CurrentToken;
+			AstNode* typeParameter = ParseTypeParameter(data);
 			if (typeParameter->success)
 			{
 				return typeParameter;
 			}
 			FreeNode(typeParameter);
-			BacktrackTo(backtrackPosition);
+			BacktrackTo(data, backtrackPosition);
 
-			AstNode* parameterDeclaration = ParseParameterDeclaration();
+			AstNode* parameterDeclaration = ParseParameterDeclaration(data);
 			if (parameterDeclaration->success)
 			{
 				return parameterDeclaration;
 			}
 
 			FreeNode(parameterDeclaration);
-			BacktrackTo(backtrackPosition);
+			BacktrackTo(data, backtrackPosition);
 			return GenerateNoSuccessAstNode();
 		}
 
-		static AstNode* ParseTypeParameter()
+		static AstNode* ParseTypeParameter(ParserData& data)
 		{
-			int backtrackPosition = CurrentToken;
-			if (Match(TokenType::KW_TEMPLATE))
+			int backtrackPosition = data.CurrentToken;
+			if (Match(data, TokenType::KW_TEMPLATE))
 			{
-				if (Match(TokenType::LEFT_ANGLE_BRACKET))
+				if (Match(data, TokenType::LEFT_ANGLE_BRACKET))
 				{
-					AstNode* templateParameterList = ParseTemplateParameterList();
+					AstNode* templateParameterList = ParseTemplateParameterList(data);
 					if (templateParameterList->success)
 					{
-						if (Match(TokenType::KW_CLASS))
+						if (Match(data, TokenType::KW_CLASS))
 						{
-							bool hasElipsis = Match(TokenType::DOT);
+							bool hasElipsis = Match(data, TokenType::DOT);
 							if (hasElipsis)
 							{
-								Consume(TokenType::DOT);
-								Consume(TokenType::DOT);
+								Consume(data, TokenType::DOT);
+								Consume(data, TokenType::DOT);
 							}
 
 							Token identifier;
 							identifier.m_Type = TokenType::None;
-							if (Peek() == TokenType::IDENTIFIER)
+							if (Peek(data) == TokenType::IDENTIFIER)
 							{
-								identifier = ConsumeCurrent(TokenType::IDENTIFIER);
+								identifier = ConsumeCurrent(data, TokenType::IDENTIFIER);
 							}
 
-							if (Match(TokenType::EQUAL))
+							if (Match(data, TokenType::EQUAL))
 							{
-								return GenerateTypeTemplateParameterNode(templateParameterList, identifier, ParseIdExpression());
+								return GenerateTypeTemplateParameterNode(templateParameterList, identifier, ParseIdExpression(data));
 							}
 							return GenerateTypeTemplateParameterNode(templateParameterList, identifier, GenerateNoSuccessAstNode());
 						}
@@ -7911,70 +7958,70 @@ namespace CppParser
 					FreeNode(templateParameterList);
 				}
 			}
-			BacktrackTo(backtrackPosition);
+			BacktrackTo(data, backtrackPosition);
 
-			if (Match(TokenType::KW_TYPENAME))
+			if (Match(data, TokenType::KW_TYPENAME))
 			{
-				bool hasElipsis = Match(TokenType::DOT);
+				bool hasElipsis = Match(data, TokenType::DOT);
 				if (hasElipsis)
 				{
-					Consume(TokenType::DOT);
-					Consume(TokenType::DOT);
+					Consume(data, TokenType::DOT);
+					Consume(data, TokenType::DOT);
 				}
 
 				Token identifier;
 				identifier.m_Type = TokenType::None;
-				if (Peek() == TokenType::IDENTIFIER)
+				if (Peek(data) == TokenType::IDENTIFIER)
 				{
-					identifier = ConsumeCurrent(TokenType::IDENTIFIER);
+					identifier = ConsumeCurrent(data, TokenType::IDENTIFIER);
 				}
 
-				if (Match(TokenType::EQUAL))
+				if (Match(data, TokenType::EQUAL))
 				{
-					return GenerateTypeTypenameParameterNode(identifier, ParseTypeId());
+					return GenerateTypeTypenameParameterNode(identifier, ParseTypeId(data));
 				}
 				return GenerateTypeTypenameParameterNode(identifier, GenerateNoSuccessAstNode());
 			}
-			BacktrackTo(backtrackPosition);
+			BacktrackTo(data, backtrackPosition);
 
-			if (Match(TokenType::KW_CLASS))
+			if (Match(data, TokenType::KW_CLASS))
 			{
-				bool hasElipsis = Match(TokenType::DOT);
+				bool hasElipsis = Match(data, TokenType::DOT);
 				if (hasElipsis)
 				{
-					Consume(TokenType::DOT);
-					Consume(TokenType::DOT);
+					Consume(data, TokenType::DOT);
+					Consume(data, TokenType::DOT);
 				}
 
 				Token identifier;
 				identifier.m_Type = TokenType::None;
-				if (Peek() == TokenType::IDENTIFIER)
+				if (Peek(data) == TokenType::IDENTIFIER)
 				{
-					identifier = ConsumeCurrent(TokenType::IDENTIFIER);
+					identifier = ConsumeCurrent(data, TokenType::IDENTIFIER);
 				}
 
-				if (Match(TokenType::EQUAL))
+				if (Match(data, TokenType::EQUAL))
 				{
-					return GenerateTypeClassParameterNode(identifier, ParseTypeId());
+					return GenerateTypeClassParameterNode(identifier, ParseTypeId(data));
 				}
 				return GenerateTypeClassParameterNode(identifier, GenerateNoSuccessAstNode());
 			}
 
-			BacktrackTo(backtrackPosition);
+			BacktrackTo(data, backtrackPosition);
 			return GenerateNoSuccessAstNode();
 		}
 
-		static AstNode* ParseSimpleTemplateId()
+		static AstNode* ParseSimpleTemplateId(ParserData& data)
 		{
-			int backtrackPosition = CurrentToken;
-			AstNode* templateName = ParseTemplateName();
+			int backtrackPosition = data.CurrentToken;
+			AstNode* templateName = ParseTemplateName(data);
 			if (templateName->success)
 			{
-				if (Match(TokenType::LEFT_ANGLE_BRACKET))
+				if (Match(data, TokenType::LEFT_ANGLE_BRACKET))
 				{
 					// Optional
-					AstNode* templateArgumentList = ParseTemplateArgumentList();
-					if (Match(TokenType::RIGHT_ANGLE_BRACKET))
+					AstNode* templateArgumentList = ParseTemplateArgumentList(data);
+					if (Match(data, TokenType::RIGHT_ANGLE_BRACKET))
 					{
 						return GenerateSimpleTemplateIdNode(templateName, templateArgumentList);
 					}
@@ -7982,131 +8029,131 @@ namespace CppParser
 			}
 
 			FreeNode(templateName);
-			BacktrackTo(backtrackPosition);
+			BacktrackTo(data, backtrackPosition);
 			return GenerateNoSuccessAstNode();
 		}
 
-		static AstNode* ParseTemplateId()
+		static AstNode* ParseTemplateId(ParserData& data)
 		{
-			int backtrackPosition = CurrentToken;
-			AstNode* simpleTemplateId = ParseSimpleTemplateId();
+			int backtrackPosition = data.CurrentToken;
+			AstNode* simpleTemplateId = ParseSimpleTemplateId(data);
 			if (simpleTemplateId->success)
 			{
 				return simpleTemplateId;
 			}
 			FreeNode(simpleTemplateId);
-			BacktrackTo(backtrackPosition);
+			BacktrackTo(data, backtrackPosition);
 
-			AstNode* literalOperatorId = ParseLiteralOperatorId();
+			AstNode* literalOperatorId = ParseLiteralOperatorId(data);
 			if (literalOperatorId->success)
 			{
-				Consume(TokenType::LEFT_ANGLE_BRACKET);
+				Consume(data, TokenType::LEFT_ANGLE_BRACKET);
 				// Optional
-				AstNode* templateArgumentList = ParseTemplateArgumentList();
-				Consume(TokenType::RIGHT_ANGLE_BRACKET);
+				AstNode* templateArgumentList = ParseTemplateArgumentList(data);
+				Consume(data, TokenType::RIGHT_ANGLE_BRACKET);
 				return GenerateLiteralOperatorTemplateIdNode(literalOperatorId, templateArgumentList);
 			}
 			FreeNode(literalOperatorId);
-			BacktrackTo(backtrackPosition);
+			BacktrackTo(data, backtrackPosition);
 
-			AstNode* operatorFunctionId = ParseOperatorFunctionId();
+			AstNode* operatorFunctionId = ParseOperatorFunctionId(data);
 			if (operatorFunctionId->success)
 			{
-				Consume(TokenType::LEFT_ANGLE_BRACKET);
+				Consume(data, TokenType::LEFT_ANGLE_BRACKET);
 				// Optional
-				AstNode* templateArgumentList = ParseTemplateArgumentList();
-				Consume(TokenType::RIGHT_ANGLE_BRACKET);
+				AstNode* templateArgumentList = ParseTemplateArgumentList(data);
+				Consume(data, TokenType::RIGHT_ANGLE_BRACKET);
 				return GenerateFunctionOperatorTemplateIdNode(operatorFunctionId, templateArgumentList);
 			}
 			FreeNode(operatorFunctionId);
-			BacktrackTo(backtrackPosition);
+			BacktrackTo(data, backtrackPosition);
 
 			return GenerateNoSuccessAstNode();
 		}
 
-		static AstNode* ParseTemplateName()
+		static AstNode* ParseTemplateName(ParserData& data)
 		{
-			if (Peek() == TokenType::IDENTIFIER)
+			if (Peek(data) == TokenType::IDENTIFIER)
 			{
-				return GenerateTemplateNameNode(ConsumeCurrent(TokenType::IDENTIFIER));
+				return GenerateTemplateNameNode(ConsumeCurrent(data, TokenType::IDENTIFIER));
 			}
 
 			return GenerateNoSuccessAstNode();
 		}
 
-		static AstNode* ParseTemplateArgumentList()
+		static AstNode* ParseTemplateArgumentList(ParserData& data)
 		{
-			AstNode* result = ParseTemplateArgument();
+			AstNode* result = ParseTemplateArgument(data);
 
-			while (Match(TokenType::COMMA))
+			while (Match(data, TokenType::COMMA))
 			{
-				result = GenerateTemplateArgumentListNode(result, ParseTemplateArgumentList());
+				result = GenerateTemplateArgumentListNode(result, ParseTemplateArgumentList(data));
 			}
 
-			if (Match(TokenType::DOT))
+			if (Match(data, TokenType::DOT))
 			{
-				Consume(TokenType::DOT);
-				Consume(TokenType::DOT);
+				Consume(data, TokenType::DOT);
+				Consume(data, TokenType::DOT);
 			}
 
 			return GenerateTemplateArgumentListNode(result, GenerateNoSuccessAstNode());
 		}
 
-		static AstNode* ParseTemplateArgument()
+		static AstNode* ParseTemplateArgument(ParserData& data)
 		{
-			int backtrackPosition = CurrentToken;
-			AstNode* idExpression = ParseIdExpression();
+			int backtrackPosition = data.CurrentToken;
+			AstNode* idExpression = ParseIdExpression(data);
 			if (idExpression->success)
 			{
 				return idExpression;
 			}
 			FreeNode(idExpression);
-			BacktrackTo(backtrackPosition);
+			BacktrackTo(data, backtrackPosition);
 
-			AstNode* typeId = ParseTypeId();
+			AstNode* typeId = ParseTypeId(data);
 			if (typeId->success)
 			{
 				return typeId;
 			}
 			FreeNode(typeId);
-			BacktrackTo(backtrackPosition);
+			BacktrackTo(data, backtrackPosition);
 
-			AstNode* constantExpression = ParseConstantExpression();
+			AstNode* constantExpression = ParseConstantExpression(data);
 			if (constantExpression->success)
 			{
 				return constantExpression;
 			}
 			FreeNode(constantExpression);
-			BacktrackTo(backtrackPosition);
+			BacktrackTo(data, backtrackPosition);
 
 			return GenerateNoSuccessAstNode();
 		}
 
-		static AstNode* ParseTypenameSpecifier()
+		static AstNode* ParseTypenameSpecifier(ParserData& data)
 		{
-			int backtrackPosition = CurrentToken;
-			if (Match(TokenType::KW_TYPENAME))
+			int backtrackPosition = data.CurrentToken;
+			if (Match(data, TokenType::KW_TYPENAME))
 			{
-				if (Match(TokenType::COLON))
+				if (Match(data, TokenType::COLON))
 				{
-					Consume(TokenType::COLON);
+					Consume(data, TokenType::COLON);
 				}
 
 				AstNode* nestedNameSpecifier = GenerateNoSuccessAstNode();
-				if (MatchBeforeSemicolon(TokenType::COLON, TokenType::COLON))
+				if (MatchBeforeSemicolon(data, TokenType::COLON, TokenType::COLON))
 				{
 					FreeNode(nestedNameSpecifier);
-					nestedNameSpecifier = ParseNestedNameSpecifier();
+					nestedNameSpecifier = ParseNestedNameSpecifier(data);
 				}
 				if (nestedNameSpecifier->success)
 				{
-					if (Peek() == TokenType::IDENTIFIER)
+					if (Peek(data) == TokenType::IDENTIFIER)
 					{
-						return GenerateTypenameSpecifierNode(nestedNameSpecifier, ConsumeCurrent(TokenType::IDENTIFIER));
+						return GenerateTypenameSpecifierNode(nestedNameSpecifier, ConsumeCurrent(data, TokenType::IDENTIFIER));
 					}
 
-					bool hasTemplateKeyword = Match(TokenType::KW_TEMPLATE);
-					AstNode* simpleTemplateId = ParseSimpleTemplateId();
+					bool hasTemplateKeyword = Match(data, TokenType::KW_TEMPLATE);
+					AstNode* simpleTemplateId = ParseSimpleTemplateId(data);
 					if (simpleTemplateId->success)
 					{
 						return GenerateTypenameTemplateSpecifierNode(nestedNameSpecifier, simpleTemplateId, hasTemplateKeyword);
@@ -8116,17 +8163,17 @@ namespace CppParser
 				FreeNode(nestedNameSpecifier);
 			}
 
-			BacktrackTo(backtrackPosition);
+			BacktrackTo(data, backtrackPosition);
 			return GenerateNoSuccessAstNode();
 		}
 
-		static AstNode* ParseExplicitInstantiation()
+		static AstNode* ParseExplicitInstantiation(ParserData& data)
 		{
-			int backtrackPosition = CurrentToken;
-			bool hasExternKeyword = Match(TokenType::KW_EXTERN);
-			if (Match(TokenType::KW_TEMPLATE))
+			int backtrackPosition = data.CurrentToken;
+			bool hasExternKeyword = Match(data, TokenType::KW_EXTERN);
+			if (Match(data, TokenType::KW_TEMPLATE))
 			{
-				AstNode* declaration = ParseDeclaration();
+				AstNode* declaration = ParseDeclaration(data);
 				if (declaration->success)
 				{
 					return GenerateExplicitInstantiationNode(declaration, hasExternKeyword);
@@ -8134,18 +8181,18 @@ namespace CppParser
 				FreeNode(declaration);
 			}
 
-			BacktrackTo(backtrackPosition);
+			BacktrackTo(data, backtrackPosition);
 			return GenerateNoSuccessAstNode();
 		}
 
-		static AstNode* ParseExplicitSpecialization()
+		static AstNode* ParseExplicitSpecialization(ParserData& data)
 		{
-			int backtrackPosition = CurrentToken;
-			if (Match(TokenType::KW_TEMPLATE))
+			int backtrackPosition = data.CurrentToken;
+			if (Match(data, TokenType::KW_TEMPLATE))
 			{
-				Consume(TokenType::LEFT_ANGLE_BRACKET);
-				Consume(TokenType::RIGHT_ANGLE_BRACKET);
-				AstNode* declaration = ParseDeclaration();
+				Consume(data, TokenType::LEFT_ANGLE_BRACKET);
+				Consume(data, TokenType::RIGHT_ANGLE_BRACKET);
+				AstNode* declaration = ParseDeclaration(data);
 				if (declaration->success)
 				{
 					declaration;
@@ -8153,20 +8200,20 @@ namespace CppParser
 				FreeNode(declaration);
 			}
 
-			BacktrackTo(backtrackPosition);
+			BacktrackTo(data, backtrackPosition);
 			return GenerateNoSuccessAstNode();
 		}
 
 		// Exceptions
-		static AstNode* ParseTryBlock()
+		static AstNode* ParseTryBlock(ParserData& data)
 		{
-			int backtrackPosition = CurrentToken;
-			if (Match(TokenType::KW_TRY))
+			int backtrackPosition = data.CurrentToken;
+			if (Match(data, TokenType::KW_TRY))
 			{
-				AstNode* compoundStatement = ParseCompoundStatement();
+				AstNode* compoundStatement = ParseCompoundStatement(data);
 				if (compoundStatement->success)
 				{
-					AstNode* handlerSeq = ParseHandlerSequence();
+					AstNode* handlerSeq = ParseHandlerSequence(data);
 					if (handlerSeq->success)
 					{
 						return GenerateTryBlockNode(compoundStatement, handlerSeq);
@@ -8176,21 +8223,21 @@ namespace CppParser
 				FreeNode(compoundStatement);
 			}
 
-			BacktrackTo(backtrackPosition);
+			BacktrackTo(data, backtrackPosition);
 			return GenerateNoSuccessAstNode();
 		}
 
-		static AstNode* ParseFunctionTryBlock()
+		static AstNode* ParseFunctionTryBlock(ParserData& data)
 		{
-			int backtrackPosition = CurrentToken;
-			if (Match(TokenType::KW_TRY))
+			int backtrackPosition = data.CurrentToken;
+			if (Match(data, TokenType::KW_TRY))
 			{
 				// Optional
-				AstNode* ctorInitializer = ParseCtorInitializer();
-				AstNode* compoundStatement = ParseCompoundStatement();
+				AstNode* ctorInitializer = ParseCtorInitializer(data);
+				AstNode* compoundStatement = ParseCompoundStatement(data);
 				if (compoundStatement->success)
 				{
-					AstNode* handlerSeq = ParseHandlerSequence();
+					AstNode* handlerSeq = ParseHandlerSequence(data);
 					if (handlerSeq->success)
 					{
 						return GenerateFunctionTryBlockNode(ctorInitializer, compoundStatement, handlerSeq);
@@ -8201,24 +8248,24 @@ namespace CppParser
 				FreeNode(ctorInitializer);
 			}
 
-			BacktrackTo(backtrackPosition);
+			BacktrackTo(data, backtrackPosition);
 			return GenerateNoSuccessAstNode();
 		}
 
-		static AstNode* ParseHandlerSequence()
+		static AstNode* ParseHandlerSequence(ParserData& data)
 		{
-			int backtrackPosition = CurrentToken;
-			AstNode* result = ParseHandler();
+			int backtrackPosition = data.CurrentToken;
+			AstNode* result = ParseHandler(data);
 			if (!result->success)
 			{
-				BacktrackTo(backtrackPosition);
+				BacktrackTo(data, backtrackPosition);
 				FreeNode(result);
 				return GenerateNoSuccessAstNode();
 			}
 
 			while (true)
 			{
-				AstNode* nextHandler = ParseHandlerSequence();
+				AstNode* nextHandler = ParseHandlerSequence(data);
 				result = GenerateHandlerSeqNode(result, nextHandler);
 				if (!nextHandler->success)
 				{
@@ -8229,17 +8276,17 @@ namespace CppParser
 			return result;
 		}
 
-		static AstNode* ParseHandler()
+		static AstNode* ParseHandler(ParserData& data)
 		{
-			int backtrackPosition = CurrentToken;
-			if (Match(TokenType::KW_CATCH))
+			int backtrackPosition = data.CurrentToken;
+			if (Match(data, TokenType::KW_CATCH))
 			{
-				Consume(TokenType::LEFT_PAREN);
-				AstNode* exceptionDeclaration = ParseExceptionDeclaration();
+				Consume(data, TokenType::LEFT_PAREN);
+				AstNode* exceptionDeclaration = ParseExceptionDeclaration(data);
 				if (exceptionDeclaration->success)
 				{
-					Consume(TokenType::RIGHT_PAREN);
-					AstNode* compoundStatement = ParseCompoundStatement();
+					Consume(data, TokenType::RIGHT_PAREN);
+					AstNode* compoundStatement = ParseCompoundStatement(data);
 					if (compoundStatement->success)
 					{
 						return GenerateHandlerNode(exceptionDeclaration, compoundStatement);
@@ -8249,80 +8296,80 @@ namespace CppParser
 				FreeNode(exceptionDeclaration);
 			}
 
-			BacktrackTo(backtrackPosition);
+			BacktrackTo(data, backtrackPosition);
 			return GenerateNoSuccessAstNode();
 		}
 
-		static AstNode* ParseExceptionDeclaration()
+		static AstNode* ParseExceptionDeclaration(ParserData& data)
 		{
-			int backtrackPosition = CurrentToken;
+			int backtrackPosition = data.CurrentToken;
 			// Optional
-			AstNode* attributeSpecifierSeq = ParseAttributeSpecifierSequence();
-			AstNode* typeSpecifierSeq = ParseTypeSpecifierSequence();
+			AstNode* attributeSpecifierSeq = ParseAttributeSpecifierSequence(data);
+			AstNode* typeSpecifierSeq = ParseTypeSpecifierSequence(data);
 			if (typeSpecifierSeq->success)
 			{
-				int backtrackPosition2 = CurrentToken;
-				AstNode* declarator = ParseDeclarator();
+				int backtrackPosition2 = data.CurrentToken;
+				AstNode* declarator = ParseDeclarator(data);
 				if (declarator->success)
 				{
 					return GenerateExceptionDeclarationNode(attributeSpecifierSeq, typeSpecifierSeq, declarator);
 				}
 				FreeNode(declarator);
-				BacktrackTo(backtrackPosition2);
+				BacktrackTo(data, backtrackPosition2);
 
 				// Optional
-				AstNode* abstractDeclarator = ParseAbstractDeclarator();
+				AstNode* abstractDeclarator = ParseAbstractDeclarator(data);
 				return GenerateExceptionAbstractDeclarationNode(attributeSpecifierSeq, typeSpecifierSeq, declarator);
 			}
 
 			FreeNode(attributeSpecifierSeq);
 			FreeNode(typeSpecifierSeq);
-			BacktrackTo(backtrackPosition);
+			BacktrackTo(data, backtrackPosition);
 			return GenerateNoSuccessAstNode();
 		}
 
-		static AstNode* ParseThrowExpression()
+		static AstNode* ParseThrowExpression(ParserData& data)
 		{
-			if (Match(TokenType::KW_THROW))
+			if (Match(data, TokenType::KW_THROW))
 			{
 				// Optional
-				AstNode* assignmentExpression = ParseAssignmentExpression();
+				AstNode* assignmentExpression = ParseAssignmentExpression(data);
 				return GenerateThrowExpressionNode(assignmentExpression);
 			}
 
 			return GenerateNoSuccessAstNode();
 		}
 
-		static AstNode* ParseExceptionSpecification()
+		static AstNode* ParseExceptionSpecification(ParserData& data)
 		{
-			int backtrackPosition = CurrentToken;
-			AstNode* noexceptSpecification = ParseNoexceptSpecification();
+			int backtrackPosition = data.CurrentToken;
+			AstNode* noexceptSpecification = ParseNoexceptSpecification(data);
 			if (noexceptSpecification->success)
 			{
 				return noexceptSpecification;
 			}
 			FreeNode(noexceptSpecification);
-			BacktrackTo(backtrackPosition);
+			BacktrackTo(data, backtrackPosition);
 
-			AstNode* dynamicExceptionSpecification = ParseDynamicExceptionSpecification();
+			AstNode* dynamicExceptionSpecification = ParseDynamicExceptionSpecification(data);
 			if (dynamicExceptionSpecification->success)
 			{
 				return dynamicExceptionSpecification;
 			}
 			FreeNode(dynamicExceptionSpecification);
-			BacktrackTo(backtrackPosition);
+			BacktrackTo(data, backtrackPosition);
 
 			return GenerateNoSuccessAstNode();
 		}
 
-		static AstNode* ParseDynamicExceptionSpecification()
+		static AstNode* ParseDynamicExceptionSpecification(ParserData& data)
 		{
-			if (Match(TokenType::KW_THROW))
+			if (Match(data, TokenType::KW_THROW))
 			{
-				Consume(TokenType::LEFT_PAREN);
+				Consume(data, TokenType::LEFT_PAREN);
 				// Optional
-				AstNode* typeIdList = ParseTypeIdList();
-				Consume(TokenType::RIGHT_PAREN);
+				AstNode* typeIdList = ParseTypeIdList(data);
+				Consume(data, TokenType::RIGHT_PAREN);
 
 				return GenerateDynamicExceptionSpecNode(typeIdList);
 			}
@@ -8330,42 +8377,42 @@ namespace CppParser
 			return GenerateNoSuccessAstNode();
 		}
 
-		static AstNode* ParseTypeIdList()
+		static AstNode* ParseTypeIdList(ParserData& data)
 		{
-			int backtrackPosition = CurrentToken;
-			AstNode* result = ParseTypeId();
+			int backtrackPosition = data.CurrentToken;
+			AstNode* result = ParseTypeId(data);
 			if (!result->success)
 			{
 				FreeNode(result);
-				BacktrackTo(backtrackPosition);
+				BacktrackTo(data, backtrackPosition);
 				return GenerateNoSuccessAstNode();
 			}
 
-			while (Match(TokenType::COMMA))
+			while (Match(data, TokenType::COMMA))
 			{
-				result = GenerateTypeIdListNode(result, ParseTypeIdList());
+				result = GenerateTypeIdListNode(result, ParseTypeIdList(data));
 			}
 
-			if (Match(TokenType::DOT))
+			if (Match(data, TokenType::DOT))
 			{
-				Consume(TokenType::DOT);
-				Consume(TokenType::DOT);
+				Consume(data, TokenType::DOT);
+				Consume(data, TokenType::DOT);
 			}
 
 			return GenerateTypeIdListNode(result, GenerateNoSuccessAstNode());
 		}
 
-		static AstNode* ParseNoexceptSpecification()
+		static AstNode* ParseNoexceptSpecification(ParserData& data)
 		{
-			int backtrackPosition = CurrentToken;
-			if (Match(TokenType::KW_NOEXCEPT))
+			int backtrackPosition = data.CurrentToken;
+			if (Match(data, TokenType::KW_NOEXCEPT))
 			{
-				if (Match(TokenType::LEFT_PAREN))
+				if (Match(data, TokenType::LEFT_PAREN))
 				{
-					AstNode* constantExpression = ParseConstantExpression();
+					AstNode* constantExpression = ParseConstantExpression(data);
 					if (constantExpression->success)
 					{
-						Consume(TokenType::RIGHT_PAREN);
+						Consume(data, TokenType::RIGHT_PAREN);
 						return GenerateNoexceptExpressionSpecNode(constantExpression);
 					}
 					FreeNode(constantExpression);
@@ -8383,26 +8430,248 @@ namespace CppParser
 		//
 		// These implement the grammar rules found at: https://www.nongnu.org/hcb/#decl-specifier-seq
 		// It has been modified where needed.
+		//
+		// The including of files is kind of hacked together. I search through basic include directories
+		// in Windows 10 right now and see if I can find the file, if it's not in the base file's directory
+		// or any of the include directories specified. I just merge the tokens found in this file
+		// into the tokens being processed right now.
 		// ===============================================================================================
 		// Preprocessing Stuff
-		static PreprocessingAstNode* ParsePreprocessingFile()
+		static std::vector<Token> GetTokensInAbsoluteFile(const std::filesystem::path& filepath, const std::vector<std::filesystem::path>& includeDirs, ParserData& data)
 		{
-			return GeneratePreprocessingFileNode(ParseGroup());
+			std::string filepathStr = filepath.string();
+			Logger::Info("Getting tokens from included file in '%s'", filepathStr.c_str());
+
+			std::vector<Token> tokensInFile = ScriptScanner::ScanTokens(filepathStr.c_str());
+			tokensInFile.insert(tokensInFile.begin(), CppTokens::CreateToken(-1, -1, TokenType::PREPROCESSING_FILE_BEGIN, filepathStr.c_str()));
+			tokensInFile.push_back(CppTokens::CreateToken(-1, -1, TokenType::PREPROCESSING_FILE_END, filepathStr.c_str()));
+			ParserData preprocessedData = {
+				tokensInFile,
+				0
+			};
+			Preprocess(filepathStr.c_str(), includeDirs, preprocessedData);
+
+			return preprocessedData.Tokens;
 		}
 
-		static PreprocessingAstNode* ParseGroup()
+		static std::filesystem::path SearchForFile(const std::filesystem::path& baseDir, const char* filename)
 		{
-			int backtrackPosition = CurrentToken;
-			PreprocessingAstNode* result = ParseGroupPart();
+			std::filesystem::path potential = baseDir / std::filesystem::path(filename);
+			if (std::filesystem::is_regular_file(potential) && potential.has_extension())
+			{
+				return potential;
+			}
+			else if (!potential.has_extension() && std::filesystem::is_regular_file(potential.replace_extension(".h")))
+			{
+				return potential.replace_extension(".h");
+			}
+			else if (potential.has_extension() && std::filesystem::is_regular_file(potential.replace_extension(".hpp")))
+			{
+				return potential.replace_extension(".hpp");
+			}
+			else if (potential.has_extension() && std::filesystem::is_regular_file(potential.replace_extension("")))
+			{
+				return potential.replace_extension("");
+			}
+			else
+			{
+				if (std::filesystem::is_directory(baseDir))
+				{
+					for (const std::filesystem::path& path : std::filesystem::directory_iterator(baseDir))
+					{
+						if (std::filesystem::is_directory(path))
+						{
+							std::filesystem::path recursiveSearch = SearchForFile(path, filename);
+							if (recursiveSearch != "")
+							{
+								return recursiveSearch;
+							}
+						}
+					}
+				}
+			}
+
+			return "";
+		}
+
+		static std::filesystem::path SearchForFile(const Token& fileToken, const char* fileBeingParsed, const std::vector<std::filesystem::path>& includeDirs)
+		{
+			// Search the directory of the file being parsed
+			std::filesystem::path currentFilePath = std::filesystem::absolute(fileBeingParsed);
+			std::filesystem::path currentFileDir = currentFilePath.parent_path();
+			std::filesystem::path potentialFilePath = currentFileDir / fileToken.m_Lexeme;
+			if (std::filesystem::is_regular_file(potentialFilePath))
+			{
+				return potentialFilePath;
+			}
+
+			// Search include directories
+			for (const std::filesystem::path& includeDir : includeDirs)
+			{
+				if (std::filesystem::is_regular_file(includeDir / fileToken.m_Lexeme))
+				{
+					return std::filesystem::absolute(includeDir / fileToken.m_Lexeme);
+				}
+			}
+
+			// Search system default directories
+			// TODO: Add support for Linux, Mac system default directories
+			// TODO: Ideally we would build an index of the 'Program Files (x86)' and just use that to search for
+			// TODO: the file...
+			static const std::vector<std::filesystem::path> defaultDirs = {
+				std::filesystem::path("C:/Program Files (x86)/Microsoft Visual Studio/2019/Community/VC/Tools/MSVC"),
+				std::filesystem::path("C:/Program Files (x86)/Microsoft Visual Studio/2019/Community/VC/Auxiliary/VS/include"),
+				std::filesystem::path("C:/Program Files (x86)/Windows Kits/10/Include"),
+				std::filesystem::path("C:/Program Files (x86)/Windows Kits/NETFXSDK")
+			};
+
+			for (const std::filesystem::path& path : defaultDirs)
+			{
+				std::filesystem::path searchedFile = SearchForFile(path, fileToken.m_Lexeme);
+				if (searchedFile != "")
+				{
+					return searchedFile;
+				}
+			}
+
+			return "";
+		}
+
+		static bool SeenFile(const std::filesystem::path& fileInQuestion, const std::vector<std::filesystem::path>& filesSeen)
+		{
+			for (const std::filesystem::path& file : filesSeen)
+			{
+				if (std::filesystem::equivalent(fileInQuestion, file))
+				{
+					return true;
+				}
+			}
+
+			return false;
+		}
+
+		static void MergeTokensAtCurrentPosition(ParserData& data, const std::vector<Token>& tokens)
+		{
+			auto currentPosition = data.Tokens.begin() + data.CurrentToken;
+			data.Tokens.insert(currentPosition, tokens.begin(), tokens.end());
+		}
+
+		static int RemoveTokensAtLine(ParserData& data, int line, std::filesystem::path filepath)
+		{
+			int numTokensRemoved = 0;
+			bool lookingInFile = false;
+			for (auto tokenIter = data.Tokens.begin(); tokenIter != data.Tokens.end();)
+			{
+				if (tokenIter->m_Type == TokenType::PREPROCESSING_FILE_BEGIN && std::filesystem::path(tokenIter->m_Lexeme) == filepath) 
+				{
+					lookingInFile = true;
+				}
+				if (tokenIter->m_Type == TokenType::PREPROCESSING_FILE_END && std::filesystem::path(tokenIter->m_Lexeme) == filepath)
+				{
+					// We have hit the end of this file, time to return
+					return numTokensRemoved;
+				}
+
+				if (lookingInFile && tokenIter->m_Line == line)
+				{
+					ParserString::FreeString(tokenIter->m_Lexeme);
+					tokenIter = data.Tokens.erase(tokenIter);
+					numTokensRemoved++;
+				}
+				else
+				{
+					tokenIter++;
+				}
+			}
+			return numTokensRemoved;
+		}
+
+		static void RemoveWhitespaceTokens(ParserData& data)
+		{
+			for (auto tokenIter = data.Tokens.begin(); tokenIter != data.Tokens.end();)
+			{
+				if (tokenIter->m_Type == TokenType::WHITESPACE || tokenIter->m_Type == TokenType::NEWLINE || tokenIter->m_Type == TokenType::COMMENT)
+				{
+					ParserString::FreeString(tokenIter->m_Lexeme);
+					tokenIter = data.Tokens.erase(tokenIter);
+				}
+				else
+				{
+					tokenIter++;
+				}
+			}
+		}
+
+		static void Preprocess(const char* fileBeingParsed, const std::vector<std::filesystem::path>& includeDirs, ParserData& data)
+		{
+			data.CurrentToken = 0;
+			int tokensSize = data.Tokens.size();
+			// Get all the #includes included
+			while (data.CurrentToken < tokensSize)
+			{
+				if (GetCurrentToken(data).m_Type == TokenType::HASHTAG)
+				{
+					PreprocessingAstNode* includeFile = ParseMacroInclude(data);
+					if (includeFile->success)
+					{
+						PreprocessingAstNode* ppToken = includeFile->macroInclude.ppTokens->ppTokens.preprocessingToken;
+						Token file;
+						if (ppToken->type == PreprocessingAstNodeType::HeaderName)
+						{
+							file = ppToken->headerName.identifier;
+						}
+						else
+						{
+							file = ppToken->headerNameString.stringLiteral;
+						}
+
+						std::filesystem::path absFile = SearchForFile(file, fileBeingParsed, includeDirs);
+						if (absFile != "" && !SeenFile(absFile, FilesSeen))
+						{
+							FilesSeen.emplace_back(absFile);
+							MergeTokensAtCurrentPosition(data, GetTokensInAbsoluteFile(absFile, includeDirs, data));
+							// The size of the tokens has just grown
+							tokensSize = data.Tokens.size();
+						}
+						if (absFile == "")
+						{
+							Logger::Warning("Unable to find file '%s'", file.m_Lexeme);
+						}
+						data.CurrentToken -= RemoveTokensAtLine(data, file.m_Line, fileBeingParsed);
+						data.CurrentToken = std::max(data.CurrentToken, 0);
+					}
+					else
+					{
+						data.CurrentToken++;
+					}
+				}
+				else
+				{
+					data.CurrentToken++;
+				}
+			}
+
+			RemoveWhitespaceTokens(data);
+		}
+
+		static PreprocessingAstNode* ParsePreprocessingFile(ParserData& data)
+		{
+			return GeneratePreprocessingFileNode(ParseGroup(data));
+		}
+
+		static PreprocessingAstNode* ParseGroup(ParserData& data)
+		{
+			int backtrackPosition = data.CurrentToken;
+			PreprocessingAstNode* result = ParseGroupPart(data);
 			if (!result->success)
 			{
 				FreePreprocessingNode(result);
-				BacktrackTo(backtrackPosition);
+				BacktrackTo(data, backtrackPosition);
 			}
 
 			while (true)
 			{
-				PreprocessingAstNode* nextGroup = ParseGroup();
+				PreprocessingAstNode* nextGroup = ParseGroup(data);
 				result = GenerateGroupNode(result, nextGroup);
 				if (!nextGroup->success)
 				{
@@ -8413,32 +8682,32 @@ namespace CppParser
 			return result;
 		}
 
-		static PreprocessingAstNode* ParseGroupPart()
+		static PreprocessingAstNode* ParseGroupPart(ParserData& data)
 		{
-			int backtrackPosition = CurrentToken;
-			PreprocessingAstNode* ifSection = ParseIfSection();
+			int backtrackPosition = data.CurrentToken;
+			PreprocessingAstNode* ifSection = ParseIfSection(data);
 			if (ifSection->success)
 			{
 				return ifSection;
 			}
 			FreePreprocessingNode(ifSection);
-			BacktrackTo(backtrackPosition);
+			BacktrackTo(data, backtrackPosition);
 
-			PreprocessingAstNode* controlLine = ParseControlLine();
+			PreprocessingAstNode* controlLine = ParseControlLine(data);
 			if (controlLine->success)
 			{
 				return controlLine;
 			}
 			FreePreprocessingNode(controlLine);
-			BacktrackTo(backtrackPosition);
+			BacktrackTo(data, backtrackPosition);
 
-			PreprocessingAstNode* textLine = ParseTextLine();
+			PreprocessingAstNode* textLine = ParseTextLine(data);
 			if (textLine->success)
 			{
 				return textLine;
 			}
 			FreePreprocessingNode(textLine);
-			BacktrackTo(backtrackPosition);
+			BacktrackTo(data, backtrackPosition);
 
 			// TODO: Add support for non-directives they look like:
 			// TODO: #
@@ -8446,83 +8715,96 @@ namespace CppParser
 			return GenerateNoSuccessPreprocessingAstNode();
 		}
 
-		static PreprocessingAstNode* ParseIfSection()
+		static PreprocessingAstNode* ParseIfSection(ParserData& data)
 		{
-			int backtrackPosition = CurrentToken;
-			PreprocessingAstNode* ifGroup = ParseIfGroup();
+			int backtrackPosition = data.CurrentToken;
+			PreprocessingAstNode* ifGroup = ParseIfGroup(data);
 			if (ifGroup->success)
 			{
 				// Optional
-				PreprocessingAstNode* elifGroups = ParseElifGroups();
-				PreprocessingAstNode* elseGroup = ParseElseGroup();
-				Consume(TokenType::MACRO_ENDIF);
+				PreprocessingAstNode* elifGroups = ParseElifGroups(data);
+				PreprocessingAstNode* elseGroup = ParseElseGroup(data);
+				Consume(data, TokenType::HASHTAG);
+				Token identifier = ConsumeCurrent(data, TokenType::IDENTIFIER);
+				Logger::Assert(ParserString::Compare(identifier.m_Lexeme, "endif"), "Expected '#endif'");
 				return GenerateIfSectionNode(ifGroup, elifGroups, elseGroup);
 			}
 
 			FreePreprocessingNode(ifGroup);
-			BacktrackTo(backtrackPosition);
+			BacktrackTo(data, backtrackPosition);
 			return GenerateNoSuccessPreprocessingAstNode();
 		}
 
-		static PreprocessingAstNode* ParseIfGroup()
+		static PreprocessingAstNode* ParseIfGroup(ParserData& data)
 		{
-			int backtrackPosition = CurrentToken;
-			if (Match(TokenType::MACRO_IF))
+			int backtrackPosition = data.CurrentToken;
+			if (Match(data, TokenType::HASHTAG))
 			{
-				AstNode* constantExpression = ParseConstantExpression();
-				if (constantExpression->success)
+				if (Peek(data) == TokenType::IDENTIFIER)
 				{
-					// TODO: Consume a new line here?
-					// optional
-					PreprocessingAstNode* group = ParseGroup();
-					return GenerateIfGroupNode(constantExpression, group);
-				}
-				FreeNode(constantExpression);
-			}
-			BacktrackTo(backtrackPosition);
+					Token identifier = ConsumeCurrent(data, TokenType::IDENTIFIER);
 
-			if (Match(TokenType::MACRO_IFDEF))
-			{
-				if (Peek() == TokenType::IDENTIFIER)
-				{
-					Token identifier = ConsumeCurrent(TokenType::IDENTIFIER);
-					// TODO: consume newline here
-					// Optional
-					PreprocessingAstNode* group = ParseGroup();
-					return GenerateIfDefGroupNode(identifier, group);
+					int backtrackPosition2 = data.CurrentToken;
+					if (ParserString::Compare(identifier.m_Lexeme, "if"))
+					{
+						AstNode* constantExpression = ParseConstantExpression(data);
+						if (constantExpression->success)
+						{
+							// optional
+							Consume(data, TokenType::NEWLINE);
+							PreprocessingAstNode* group = ParseGroup(data);
+							return GenerateIfGroupNode(constantExpression, group);
+						}
+						FreeNode(constantExpression);
+					}
+					BacktrackTo(data, backtrackPosition2);
+
+					if (ParserString::Compare(identifier.m_Lexeme, "ifdef"))
+					{
+						if (Peek(data) == TokenType::IDENTIFIER)
+						{
+							Token identifier = ConsumeCurrent(data, TokenType::IDENTIFIER);
+							Consume(data, TokenType::NEWLINE);
+							// Optional
+							PreprocessingAstNode* group = ParseGroup(data);
+							return GenerateIfDefGroupNode(identifier, group);
+						}
+					}
+					BacktrackTo(data, backtrackPosition2);
+
+					if (ParserString::Compare(identifier.m_Lexeme, "ifndef"))
+					{
+						if (Peek(data) == TokenType::IDENTIFIER)
+						{
+							Token identifier = ConsumeCurrent(data, TokenType::IDENTIFIER);
+							Consume(data, TokenType::NEWLINE);
+							// Optional
+							PreprocessingAstNode* group = ParseGroup(data);
+							return GenerateIfNDefGroupNode(identifier, group);
+						}
+					}
+
 				}
 			}
 
-			if (Match(TokenType::MACRO_IFNDEF))
-			{
-				if (Peek() == TokenType::IDENTIFIER)
-				{
-					Token identifier = ConsumeCurrent(TokenType::IDENTIFIER);
-					// TODO: consume newline here
-					// Optional
-					PreprocessingAstNode* group = ParseGroup();
-					return GenerateIfNDefGroupNode(identifier, group);
-				}
-			}
-
-			BacktrackTo(backtrackPosition);
+			BacktrackTo(data, backtrackPosition);
 			return GenerateNoSuccessPreprocessingAstNode();
 		}
 
-		static PreprocessingAstNode* ParseElifGroups()
+		static PreprocessingAstNode* ParseElifGroups(ParserData& data)
 		{
-			int backtrackPosition = CurrentToken;
-			PreprocessingAstNode* result = ParseElifGroup();
+			int backtrackPosition = data.CurrentToken;
+			PreprocessingAstNode* result = ParseElifGroup(data);
 			if (!result->success)
 			{
 				FreePreprocessingNode(result);
-				BacktrackTo(backtrackPosition);
+				BacktrackTo(data, backtrackPosition);
 				return GenerateNoSuccessPreprocessingAstNode();
 			}
 
 			while (true)
 			{
-				PreprocessingAstNode* nextGroup = ParseElifGroups();
+				PreprocessingAstNode* nextGroup = ParseElifGroups(data);
 				result = GenerateElifGroupsNode(result, nextGroup);
 				if (!nextGroup->success)
 				{
@@ -8533,184 +8815,222 @@ namespace CppParser
 			return GenerateNoSuccessPreprocessingAstNode();
 		}
 
-		static PreprocessingAstNode* ParseElifGroup()
+		static PreprocessingAstNode* ParseElifGroup(ParserData& data)
 		{
-			int backtrackPosition = CurrentToken;
-			if (Match(TokenType::MACRO_ELIF))
+			int backtrackPosition = data.CurrentToken;
+			if (Match(data, TokenType::HASHTAG))
 			{
-				AstNode* constantExpression = ParseConstantExpression();
-				if (constantExpression->success)
+				if (Peek(data) == TokenType::IDENTIFIER)
 				{
-					// TODO: consume newline
-					// Optional
-					PreprocessingAstNode* group = ParseGroup();
-					return GenerateElifGroupNode(constantExpression, group);
-				}
-				FreeNode(constantExpression);
-			}
+					Token identifier = ConsumeCurrent(data, TokenType::IDENTIFIER);
 
-			BacktrackTo(backtrackPosition);
-			return GenerateNoSuccessPreprocessingAstNode();
-		}
-
-		static PreprocessingAstNode* ParseElseGroup()
-		{
-			int backtrackPosition = CurrentToken;
-			if (Match(TokenType::MACRO_ELSE))
-			{
-				// TODO: consume newline
-				// Optional
-				PreprocessingAstNode* group = ParseGroup();
-				return GenerateElseGroupNode(group);
-			}
-
-			BacktrackTo(backtrackPosition);
-			return GenerateNoSuccessPreprocessingAstNode();
-		}
-
-		static PreprocessingAstNode* ParseControlLine()
-		{
-			int backtrackPosition = CurrentToken;
-			if (Match(TokenType::MACRO_INCLUDE))
-			{
-				if (Match(TokenType::LEFT_ANGLE_BRACKET))
-				{
-					PreprocessingAstNode* ppTokens = ParsePPTokens();
-					if (ppTokens->success)
+					if (ParserString::Compare(identifier.m_Lexeme, "elif"))
 					{
-						Consume(TokenType::RIGHT_ANGLE_BRACKET);
-						// TODO: Consume newline
-						return GenerateMacroIncludeNode(ppTokens);
-					}
-					FreePreprocessingNode(ppTokens);
-				}
-				else
-				{
-					PreprocessingAstNode* ppTokens = ParsePPTokens();
-					if (ppTokens->success)
-					{
-						// TODO: Consume newline
-						return GenerateMacroIncludeNode(ppTokens);
-					}
-					FreePreprocessingNode(ppTokens);
-				}
-			}
-			BacktrackTo(backtrackPosition);
-
-			if (Match(TokenType::MACRO_DEFINE))
-			{
-				if (Peek() == TokenType::IDENTIFIER)
-				{
-					Token identifier = ConsumeCurrent(TokenType::IDENTIFIER);
-					// TODO: make sure this left parenthisis is not preceded by whitespace
-					if (Match(TokenType::LEFT_PAREN))
-					{
-						PreprocessingAstNode* identifierList = ParseIdentifierList();
-						if (identifierList->success)
+						AstNode* constantExpression = ParseConstantExpression(data);
+						if (constantExpression->success)
 						{
-							Match(TokenType::COMMA);
-							if (Match(TokenType::DOT))
+							Consume(data, TokenType::NEWLINE);
+							// Optional
+							PreprocessingAstNode* group = ParseGroup(data);
+							return GenerateElifGroupNode(constantExpression, group);
+						}
+						FreeNode(constantExpression);
+					}
+				}
+			}
+
+			BacktrackTo(data, backtrackPosition);
+			return GenerateNoSuccessPreprocessingAstNode();
+		}
+
+		static PreprocessingAstNode* ParseElseGroup(ParserData& data)
+		{
+			int backtrackPosition = data.CurrentToken;
+			if (Match(data, TokenType::HASHTAG))
+			{
+				if (Peek(data) == TokenType::IDENTIFIER)
+				{
+					Token identifier = ConsumeCurrent(data, TokenType::IDENTIFIER);
+
+					if (ParserString::Compare(identifier.m_Lexeme, "else"))
+					{
+						Consume(data, TokenType::NEWLINE);
+						// Optional
+						PreprocessingAstNode* group = ParseGroup(data);
+						return GenerateElseGroupNode(group);
+					}
+				}
+			}
+
+			BacktrackTo(data, backtrackPosition);
+			return GenerateNoSuccessPreprocessingAstNode();
+		}
+
+		static PreprocessingAstNode* ParseMacroInclude(ParserData& data)
+		{
+			int backtrackPosition = data.CurrentToken;
+			if (Match(data, TokenType::HASHTAG))
+			{
+				if (Peek(data) == TokenType::IDENTIFIER)
+				{
+					Token identifier = ConsumeCurrent(data, TokenType::IDENTIFIER);
+					if (ParserString::Compare(identifier.m_Lexeme, "include"))
+					{
+						PreprocessingAstNode* ppTokens = ParsePPTokens(data);
+						if (ppTokens->success)
+						{
+							Consume(data, TokenType::NEWLINE);
+							return GenerateMacroIncludeNode(ppTokens);
+						}
+					}
+				}
+			}
+			BacktrackTo(data, backtrackPosition);
+
+			return GenerateNoSuccessPreprocessingAstNode();
+		}
+
+		static PreprocessingAstNode* ParseControlLine(ParserData& data)
+		{
+			int backtrackPosition = data.CurrentToken;
+			PreprocessingAstNode* macroInclude = ParseMacroInclude(data);
+			if (macroInclude->success)
+			{
+				return macroInclude;
+			}
+			BacktrackTo(data, backtrackPosition);
+			FreePreprocessingNode(macroInclude);
+
+			if (Match(data, TokenType::HASHTAG))
+			{
+				if (Peek(data) == TokenType::IDENTIFIER)
+				{
+					Token identifier = ConsumeCurrent(data, TokenType::IDENTIFIER);
+					int backtrackPosition2 = data.CurrentToken;
+
+					if (ParserString::Compare(identifier.m_Lexeme, "define"))
+					{
+						if (Peek(data) == TokenType::IDENTIFIER)
+						{
+							Token identifier = ConsumeCurrent(data, TokenType::IDENTIFIER);
+							// TODO: make sure this left parenthisis is not preceded by whitespace
+							if (Match(data, TokenType::LEFT_PAREN))
 							{
-								Consume(TokenType::DOT);
-								Consume(TokenType::DOT);
+								PreprocessingAstNode* identifierList = ParseIdentifierList(data);
+								if (identifierList->success)
+								{
+									Match(data, TokenType::COMMA);
+									if (Match(data, TokenType::DOT))
+									{
+										Consume(data, TokenType::DOT);
+										Consume(data, TokenType::DOT);
+									}
+								}
+
+								Consume(data, TokenType::RIGHT_PAREN);
+								PreprocessingAstNode* replacementList = ParseReplacementList(data);
+								if (replacementList->success)
+								{
+									Consume(data, TokenType::NEWLINE);
+									return GenerateMacroDefineFunctionNode(identifier, identifierList, replacementList);
+								}
+								FreePreprocessingNode(replacementList);
+								FreePreprocessingNode(identifierList);
 							}
-						}
 
-						Consume(TokenType::RIGHT_PAREN);
-						PreprocessingAstNode* replacementList = ParseReplacementList();
-						if (replacementList->success)
-						{
-							// TODO: Consume newline
-							return GenerateMacroDefineFunctionNode(identifier, identifierList, replacementList);
+							PreprocessingAstNode* replacementList = ParseReplacementList(data);
+							if (replacementList->success)
+							{
+								Consume(data, TokenType::NEWLINE);
+								return GenerateMacroDefineNode(identifier, replacementList);
+							}
+							FreePreprocessingNode(replacementList);
 						}
-						FreePreprocessingNode(replacementList);
-						FreePreprocessingNode(identifierList);
 					}
+					BacktrackTo(data, backtrackPosition2);
 
-					PreprocessingAstNode* replacementList = ParseReplacementList();
-					if (replacementList->success)
+					if (ParserString::Compare(identifier.m_Lexeme, "undef"))
 					{
-						// TODO: consume newline
-						return GenerateMacroDefineNode(identifier, replacementList);
+						if (Peek(data) == TokenType::IDENTIFIER)
+						{
+							Token identifier = ConsumeCurrent(data, TokenType::IDENTIFIER);
+							Consume(data, TokenType::NEWLINE);
+							return GenerateMacroUndefNode(identifier);
+						}
 					}
-					FreePreprocessingNode(replacementList);
+					BacktrackTo(data, backtrackPosition2);
+
+					if (ParserString::Compare(identifier.m_Lexeme, "line"))
+					{
+						PreprocessingAstNode* ppTokens = ParsePPTokens(data);
+						if (ppTokens->success)
+						{
+							Consume(data, TokenType::NEWLINE);
+							return GenerateMacroLineNode(ppTokens);
+						}
+						FreePreprocessingNode(ppTokens);
+					}
+					BacktrackTo(data, backtrackPosition2);
+
+					if (ParserString::Compare(identifier.m_Lexeme, "error"))
+					{
+						// Optional
+						PreprocessingAstNode* ppTokens = ParsePPTokens(data);
+						Consume(data, TokenType::NEWLINE);
+						return GenerateMacroErrorNode(ppTokens);
+					}
+					BacktrackTo(data, backtrackPosition2);
+
+					if (ParserString::Compare(identifier.m_Lexeme, "pragma"))
+					{
+						// Optional
+						PreprocessingAstNode* ppTokens = ParsePPTokens(data);
+						Consume(data, TokenType::NEWLINE);
+						return GenerateMacroPragmaNode(ppTokens);
+					}
+					BacktrackTo(data, backtrackPosition2);
+
+					if (Match(data, TokenType::NEWLINE))
+					{
+						return GenerateEmptyMacroNode();
+					}
 				}
 			}
-			BacktrackTo(backtrackPosition);
 
-			if (Match(TokenType::MACRO_UNDEF))
-			{
-				if (Peek() == TokenType::IDENTIFIER)
-				{
-					Token identifier = ConsumeCurrent(TokenType::IDENTIFIER);
-					// TODO: Consume newline
-					return GenerateMacroUndefNode(identifier);
-				}
-			}
-			BacktrackTo(backtrackPosition);
-
-			if (Match(TokenType::MACRO_LINE))
-			{
-				PreprocessingAstNode* ppTokens = ParsePPTokens();
-				if (ppTokens->success)
-				{
-					// TODO: consume newline
-					return GenerateMacroLineNode(ppTokens);
-				}
-				FreePreprocessingNode(ppTokens);
-			}
-			BacktrackTo(backtrackPosition);
-
-			if (Match(TokenType::MACRO_ERROR))
-			{
-				// Optional
-				PreprocessingAstNode* ppTokens = ParsePPTokens();
-				// TODO: Consume newline
-				return GenerateMacroErrorNode(ppTokens);
-			}
-
-			if (Match(TokenType::MACRO_PRAGMA))
-			{
-				// Optional
-				PreprocessingAstNode* ppTokens = ParsePPTokens();
-				// TODO: consume newline
-				return GenerateMacroPragmaNode(ppTokens);
-			}
-
-			// TODO: Consume # symbol followed by newline
+			BacktrackTo(data, backtrackPosition);
 			return GenerateNoSuccessPreprocessingAstNode();
 		}
 
-		static PreprocessingAstNode* ParseTextLine()
+		static PreprocessingAstNode* ParseTextLine(ParserData& data)
 		{
 			// Optional
-			PreprocessingAstNode* ppTokens = ParsePPTokens();
-			// TODO: Consume newline
+			PreprocessingAstNode* ppTokens = ParsePPTokens(data);
+			Consume(data, TokenType::NEWLINE);
 			return GenerateTextLineNode(ppTokens);
 		}
 
-		static PreprocessingAstNode* ParseNonDirective()
+		static PreprocessingAstNode* ParseNonDirective(ParserData& data)
 		{
-			int backtrackPosition = CurrentToken;
-			PreprocessingAstNode* ppTokens = ParsePPTokens();
+			int backtrackPosition = data.CurrentToken;
+			PreprocessingAstNode* ppTokens = ParsePPTokens(data);
 			if (ppTokens->success)
 			{
-				// TODO: Consume newline
+				Consume(data, TokenType::NEWLINE);
 				return GenerateNonDirectiveNode(ppTokens);
 			}
 
 			return GenerateNoSuccessPreprocessingAstNode();
 		}
 
-		static PreprocessingAstNode* ParseIdentifierList()
+		static PreprocessingAstNode* ParseIdentifierList(ParserData& data)
 		{
-			if (Peek() == TokenType::IDENTIFIER)
+			if (Peek(data) == TokenType::IDENTIFIER)
 			{
-				PreprocessingAstNode* result = GenerateIdentifierNode(ConsumeCurrent(TokenType::IDENTIFIER));
+				PreprocessingAstNode* result = GenerateIdentifierNode(ConsumeCurrent(data, TokenType::IDENTIFIER));
 
-				while (Match(TokenType::COMMA))
+				while (Match(data, TokenType::COMMA))
 				{
-					result = GenerateIdentifierListNode(result, ParseIdentifierList());
+					result = GenerateIdentifierListNode(result, ParseIdentifierList(data));
 				}
 
 				return result;
@@ -8719,27 +9039,27 @@ namespace CppParser
 			return GenerateNoSuccessPreprocessingAstNode();
 		}
 
-		static PreprocessingAstNode* ParseReplacementList()
+		static PreprocessingAstNode* ParseReplacementList(ParserData& data)
 		{
 			// Optional
-			PreprocessingAstNode* ppTokens = ParsePPTokens();
+			PreprocessingAstNode* ppTokens = ParsePPTokens(data);
 			return GenerateReplacementListNode(ppTokens);
 		}
 
-		static PreprocessingAstNode* ParsePPTokens()
+		static PreprocessingAstNode* ParsePPTokens(ParserData& data)
 		{
-			int backtrackPosition = CurrentToken;
-			PreprocessingAstNode* result = ParsePreprocessingToken();
+			int backtrackPosition = data.CurrentToken;
+			PreprocessingAstNode* result = ParsePreprocessingToken(data);
 			if (!result->success)
 			{
 				FreePreprocessingNode(result);
-				BacktrackTo(backtrackPosition);
+				BacktrackTo(data, backtrackPosition);
 				return GenerateNoSuccessPreprocessingAstNode();
 			}
 
 			while (true)
 			{
-				PreprocessingAstNode* nextPPToken = ParsePPTokens();
+				PreprocessingAstNode* nextPPToken = ParsePPTokens(data);
 				result = GeneratePPTokensNode(result, nextPPToken);
 				if (!nextPPToken->success)
 				{
@@ -8750,123 +9070,137 @@ namespace CppParser
 			return result;
 		}
 
-		static PreprocessingAstNode* ParseNumberLiteral()
+		static PreprocessingAstNode* ParseNumberLiteral(ParserData& data)
 		{
-			if (Peek() == TokenType::FLOATING_POINT_LITERAL || Peek() == TokenType::INTEGER_LITERAL)
+			if (Peek(data) == TokenType::FLOATING_POINT_LITERAL || Peek(data) == TokenType::INTEGER_LITERAL)
 			{
-				return GenerateNumberLiteralNode(ConsumeCurrent(Peek()));
+				return GenerateNumberLiteralNode(ConsumeCurrent(data, Peek(data)));
 			}
 
 			return GenerateNoSuccessPreprocessingAstNode();
 		}
 
 		// Preprocessor Stuff
-		static PreprocessingAstNode* ParsePreprocessingToken()
+		static PreprocessingAstNode* ParsePreprocessingToken(ParserData& data)
 		{
-			//if (Match(TokenType::NEWLINE))
-			//{
-			//	return GenerateNoSuccessPreprocessingAstNode();
-			//}
+			if (Peek(data) == TokenType::NEWLINE)
+			{
+				return GenerateNoSuccessPreprocessingAstNode();
+			}
 
-			int backtrackPosition = CurrentToken;
-			PreprocessingAstNode* headerName = ParseHeaderName();
+			int backtrackPosition = data.CurrentToken;
+			PreprocessingAstNode* headerName = ParseHeaderName(data);
 			if (headerName->success)
 			{
 				return headerName;
 			}
 			FreePreprocessingNode(headerName);
-			BacktrackTo(backtrackPosition);
+			BacktrackTo(data, backtrackPosition);
 
-			if (Peek() == TokenType::IDENTIFIER)
+			if (Peek(data) == TokenType::IDENTIFIER)
 			{
-				return GenerateIdentifierNode(ConsumeCurrent(TokenType::IDENTIFIER));
+				return GenerateIdentifierNode(ConsumeCurrent(data, TokenType::IDENTIFIER));
 			}
 
-			PreprocessingAstNode* numberLiteral = ParseNumberLiteral();
+			PreprocessingAstNode* numberLiteral = ParseNumberLiteral(data);
 			if (numberLiteral->success)
 			{
 				return numberLiteral;
 			}
 			FreePreprocessingNode(numberLiteral);
-			BacktrackTo(backtrackPosition);
+			BacktrackTo(data, backtrackPosition);
 
-			PreprocessingAstNode* characterLiteral = ParseCharacterLiteral();
+			PreprocessingAstNode* characterLiteral = ParseCharacterLiteral(data);
 			if (characterLiteral->success)
 			{
 				return characterLiteral;
 			}
 			FreePreprocessingNode(characterLiteral);
-			BacktrackTo(backtrackPosition);
+			BacktrackTo(data, backtrackPosition);
 
-			PreprocessingAstNode* stringLiteral = ParseStringLiteral();
+			PreprocessingAstNode* stringLiteral = ParseStringLiteral(data);
 			if (stringLiteral->success)
 			{
 				return stringLiteral;
 			}
 			FreePreprocessingNode(stringLiteral);
-			BacktrackTo(backtrackPosition);
+			BacktrackTo(data, backtrackPosition);
 
-			if (Match(TokenType::DOT))
+			if (Match(data, TokenType::DOT))
 			{
 				// TODO: Replace this with the correct node
 				return GenerateNoSuccessPreprocessingAstNode();// GenerateEmptyStatementNode();
 			}
 
 			// TODO: Should I do this...?
-			//PreprocessingAstNode* preprocessingOpOrPunc = ParsePreprocessingOpOrPunc();
+			//PreprocessingAstNode* preprocessingOpOrPunc = ParsePreprocessingOpOrPunc(data);
 			//if (preprocessingOpOrPunc->success)
 			//{
 			//	return preprocessingOpOrPunc;
 			//}
 			//FreePreprocessingNode(preprocessingOpOrPunc);
-			//BacktrackTo(backtrackPosition);
+			//BacktrackTo(data, backtrackPosition);
 
 			return GenerateNoSuccessPreprocessingAstNode();
 		}
 
-		static PreprocessingAstNode* ParseHeaderName()
+		static PreprocessingAstNode* ParseHeaderName(ParserData& data)
 		{
-			if (Peek() == TokenType::LEFT_ANGLE_BRACKET)
+			if (Match(data, TokenType::LEFT_ANGLE_BRACKET))
 			{
-				Token identifier = ConsumeCurrent(TokenType::IDENTIFIER);
-				Consume(TokenType::RIGHT_ANGLE_BRACKET);
+				Token identifier = ConsumeCurrent(data, Peek(data));
+				identifier.m_Lexeme = ParserString::CreateString(identifier.m_Lexeme);
+				while (!Match(data, TokenType::RIGHT_ANGLE_BRACKET))
+				{
+					if (Match(data, TokenType::NEWLINE))
+					{
+						Logger::Error("Invalid #include definition. Must have a '>' before newline.");
+					}
+
+					// Join tokens and erase invalid tokens, it's a mess
+					int tokenPos = data.CurrentToken;
+					Token token = ConsumeCurrent(data, Peek(data));
+					char* oldStr = identifier.m_Lexeme;
+					identifier.m_Lexeme = ParserString::Join(identifier.m_Lexeme, token.m_Lexeme);
+					ParserString::FreeString(oldStr);
+				}
 				return GenerateHeaderNameNode(identifier);
 			}
 
-			if (Peek() == TokenType::STRING_LITERAL)
+			if (Peek(data) == TokenType::STRING_LITERAL)
 			{
-				Token stringLiteral = ConsumeCurrent(TokenType::STRING_LITERAL);
+				Token stringLiteral = ConsumeCurrent(data, TokenType::STRING_LITERAL);
 				return GenerateHeaderNameStringNode(stringLiteral);
 			}
 
 			return GenerateNoSuccessPreprocessingAstNode();
 		}
 
-		static PreprocessingAstNode* ParseCharacterLiteral()
+		static PreprocessingAstNode* ParseCharacterLiteral(ParserData& data)
 		{
-			if (Peek() == TokenType::CHARACTER_LITERAL)
+			if (Peek(data) == TokenType::CHARACTER_LITERAL)
 			{
-				return GenerateCharacterLiteralNode(ConsumeCurrent(TokenType::CHARACTER_LITERAL));
+				return GenerateCharacterLiteralNode(ConsumeCurrent(data, TokenType::CHARACTER_LITERAL));
 			}
 			return GenerateNoSuccessPreprocessingAstNode();
 		}
 
-		static PreprocessingAstNode* ParseStringLiteral()
+		static PreprocessingAstNode* ParseStringLiteral(ParserData& data)
 		{
-			if (Peek() == TokenType::STRING_LITERAL)
+			if (Peek(data) == TokenType::STRING_LITERAL)
 			{
-				Token stringLiteral = ConsumeCurrent(TokenType::STRING_LITERAL);
+				Token stringLiteral = ConsumeCurrent(data, TokenType::STRING_LITERAL);
 				return GenerateStringLiteralNode(stringLiteral);
 			}
 
 			return GenerateNoSuccessPreprocessingAstNode();
 		}
 
-		 // TODO: Should I do these...?
-		 static PreprocessingAstNode* ParsePreprocessingOpOrPunc();
-		 static PreprocessingAstNode* ParseHCharSequence();
-		 static PreprocessingAstNode* ParseHChar();
-		 static PreprocessingAstNode* ParseQCharSequence();
-		 static PreprocessingAstNode* ParseQChar();
+		// TODO: Should I do these...?
+		static PreprocessingAstNode* ParsePreprocessingOpOrPunc(ParserData& data);
+		static PreprocessingAstNode* ParseHCharSequence(ParserData& data);
+		static PreprocessingAstNode* ParseHChar(ParserData& data);
+		static PreprocessingAstNode* ParseQCharSequence(ParserData& data);
+		static PreprocessingAstNode* ParseQChar(ParserData& data);
 	}
 }

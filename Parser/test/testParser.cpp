@@ -1,5 +1,5 @@
-#include <vector>
-#include <string>
+#include <vector.h>
+#include <string.h>
 #include <stdio.h>
 
 #define COMPLEX(x) do \

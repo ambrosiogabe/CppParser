@@ -2,6 +2,8 @@
 #include "cppParser/ScriptScanner.h"
 #include "cppParser/ScriptParser.h"
 
+#include <filesystem>
+
 namespace CppParser
 {
 	void PrintClasses(AstNode* classVirtualHead)
@@ -19,7 +21,8 @@ int main()
 
 	std::vector<Token> tokens = ScriptScanner::ScanTokens("testParser.cpp");
 	ScriptScanner::DebugPrint(tokens);
-	AstNode* parseTree = Parser::Parse(tokens);
+	std::vector<std::filesystem::path> includeDirs = {};
+	AstNode* parseTree = Parser::Parse("testParser.cpp", includeDirs, tokens);
 	Parser::WalkTree(parseTree, CppParser::PrintClasses, AstNodeType::ClassVirtualHead);
 	Parser::FreeTree(parseTree);
 

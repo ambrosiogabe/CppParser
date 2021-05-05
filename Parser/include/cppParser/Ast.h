@@ -34,6 +34,7 @@ namespace CppParser
 		CharacterLiteral,
 		HeaderName,
 		HeaderNameString,
+		EmptyMacro,
 	};
 
 	enum class AstNodeType

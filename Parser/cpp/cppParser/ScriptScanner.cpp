@@ -191,22 +191,6 @@ namespace CppParser
 			{ "volatile",      TokenType::KW_VOLATILE },
 			{ "wchar_t",       TokenType::KW_WCHAR_T },
 			{ "while",         TokenType::KW_WHILE },
-
-			// Macros
-			//{ "#include",    TokenType::MACRO_INCLUDE },
-			//{ "#ifdef",      TokenType::MACRO_IFDEF },
-			//{ "#ifndef",     TokenType::MACRO_IFNDEF },
-			//{ "#define",     TokenType::MACRO_DEFINE },
-			//{ "#undefine",   TokenType::MACRO_UNDEF },
-			//{ "#if",         TokenType::MACRO_IF },
-			//{ "#elif",       TokenType::MACRO_ELIF },
-			//{ "#endif",      TokenType::MACRO_ENDIF },
-			//{ "#else",       TokenType::MACRO_ELSE },
-			//{ "#error",      TokenType::MACRO_ERROR },
-			//{ "#line",       TokenType::MACRO_LINE },
-			//{ "#pragma",     TokenType::MACRO_PRAGMA },
-			//{ "#region",     TokenType::MACRO_REGION },
-			//{ "#using",      TokenType::MACRO_USING }
 		};
 
 		static const std::unordered_map<TokenType, const char*> tokenTypeToString = {
@@ -346,22 +330,8 @@ namespace CppParser
 			{ TokenType::HASHTAG,          "#" },
 			{ TokenType::END_OF_FILE,      "EOF"},
 			{ TokenType::ERROR_TYPE,       "ERROR_TYPE"},
-
-			// Macros
-			//{ TokenType::MACRO_INCLUDE, "#include" },
-			//{ TokenType::MACRO_IFDEF,   "#ifdef" },
-			//{ TokenType::MACRO_IFNDEF,  "#ifndef" },
-			//{ TokenType::MACRO_DEFINE,  "#define" },
-			//{ TokenType::MACRO_UNDEF,   "#undefine" },
-			//{ TokenType::MACRO_IF,      "#if" },
-			//{ TokenType::MACRO_ELIF,    "#elif" },
-			//{ TokenType::MACRO_ENDIF,   "#endif" },
-			//{ TokenType::MACRO_ELSE,    "#else" },
-			//{ TokenType::MACRO_ERROR,   "#error" },
-			//{ TokenType::MACRO_LINE,    "#line" },
-			//{ TokenType::MACRO_PRAGMA,  "#pragma" },
-			//{ TokenType::MACRO_REGION,  "#region" },
-			//{ TokenType::MACRO_USING,   "#using" }
+			{ TokenType::PREPROCESSING_FILE_BEGIN, "Special Preprocessing File Begin" },
+			{ TokenType::PREPROCESSING_FILE_END, "Special Preprocessing File End" },
 		};
 
 		// Main declarations
@@ -404,7 +374,7 @@ namespace CppParser
 					tokens.push_back(token);
 			}
 
-			tokens.emplace_back(Token{ m_Line, m_Column, TokenType::END_OF_FILE, "EOF" });
+			tokens.emplace_back(Token{ -1, m_Column, TokenType::END_OF_FILE, ParserString::CreateString("EOF") });
 
 			FileIO::DefaultFreeFile(rawFileContents);
 			return tokens;
@@ -619,7 +589,7 @@ namespace CppParser
 				}
 				if (Match('*'))
 				{
-					while (!AtEnd() && Peek() != '*' && PeekNext() != '/')
+					while (!AtEnd() && !(Peek() == '*' && PeekNext() == '/'))
 					{
 						c = Advance();
 						if (c == '\n')
@@ -939,7 +909,7 @@ namespace CppParser
 			{
 				if (Peek() == '\n')
 				{
-					Logger::Warning("Invalid character literal encountered while parsing at line: %d:%d", m_Line, m_Column);
+					Logger::Warning("Invalid character literal encountered while scanning at line: %d:%d", m_Line, m_Column);
 					m_Line++;
 					m_Column = -1;
 					break;
@@ -960,7 +930,7 @@ namespace CppParser
 			if (AtEnd())
 			{
 				// TODO: This might not need to be here
-				Logger::Warning("Unexpected character literal at line %d:%d", m_Line, m_Column);
+				Logger::Warning("Unexpected character literal encountered while scanning at line %d:%d. We hit the end of the file.", m_Line, m_Column);
 				return GenerateErrorToken();
 			}
 
@@ -1024,8 +994,17 @@ namespace CppParser
 
 			Advance();
 
-			std::string value = m_FileContents.substr(m_Start, m_Cursor - m_Start);
-			return Token{ m_Line, m_Column - (m_Cursor - m_Start), TokenType::STRING_LITERAL, ParserString::CreateString(value.c_str()) };
+			if (!isRawStringLiteral)
+			{
+				// Remove thes start and end quotes
+				std::string value = m_FileContents.substr(m_Start + (unsigned long long)1, (unsigned long long)m_Cursor - m_Start - (unsigned long long)2);
+				return Token{ m_Line, m_Column - (m_Cursor - m_Start), TokenType::STRING_LITERAL, ParserString::CreateString(value.c_str()) };
+			}
+			else
+			{
+				std::string value = m_FileContents.substr(m_Start, (unsigned long long)m_Cursor - (unsigned long long)m_Start);
+				return Token{ m_Line, m_Column - (m_Cursor - m_Start), TokenType::STRING_LITERAL, ParserString::CreateString(value.c_str()) };
+			}
 		}
 
 		static char Advance()
