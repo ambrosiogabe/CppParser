@@ -7,6 +7,7 @@ namespace CppParser
 	enum class PreprocessingAstNodeType
 	{
 		None,
+		PreprocessingOpOrPunc,
 		PreprocessingFile,
 		Group,
 		IfSection,
@@ -35,6 +36,7 @@ namespace CppParser
 		HeaderName,
 		HeaderNameString,
 		EmptyMacro,
+		All,
 	};
 
 	enum class AstNodeType
@@ -2015,6 +2017,11 @@ namespace CppParser
 		PreprocessingAstNode* group;
 	};
 
+	struct PreprocessingOpOrPunc
+	{
+		Token opOrPunc;
+	};
+
 	struct PreprocessingAstNode
 	{
 		PreprocessingAstNode() {}
@@ -2053,6 +2060,7 @@ namespace CppParser
 			CharacterLiteralNode characterLiteral;
 			HeaderNameNode headerName;
 			HeaderNameStringNode headerNameString;
+			PreprocessingOpOrPunc preprocessingOpOrPunc;
 		};
 	};
 }

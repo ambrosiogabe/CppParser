@@ -714,8 +714,6 @@ namespace CppParser
 				m_Line++;
 				if (PeekPrevious(2) == '\\' || (PeekPrevious(2) == '\r' && PeekPrevious(3) == '\\'))
 				{
-					m_Line++;
-					m_Column = 0;
 					return GenerateWhitespaceToken();
 				}
 				return GenerateToken(TokenType::NEWLINE, "\\n");

@@ -3,6 +3,7 @@
 #include "cppParser/Ast.h"
 #include "cppParser/ScriptScanner.h"
 #include "cppParser/Logger.h"
+#include "cppParser/Symbols.h"
 
 #include <algorithm>
 #include <cstring>
@@ -12,11 +13,6 @@ namespace CppParser
 	namespace Parser
 	{
 		// Internal variables
-		struct PPSymbolTable
-		{
-
-		};
-
 		static PPSymbolTable PreprocessingSymbolTable;
 		static std::vector<std::filesystem::path> FilesSeen = {};
 		struct ParserData
@@ -63,7 +59,7 @@ namespace CppParser
 
 		static void FreePreprocessingNode(PreprocessingAstNode* node)
 		{
-			//WalkPreprocessingTree(node, FreePreprocessingNodeCallback);
+			WalkPreprocessingTree(node, FreePreprocessingNodeCallback);
 		}
 
 		// =============================================================================================
@@ -903,6 +899,116 @@ namespace CppParser
 #undef WALK
 		}
 
+		void WalkPreprocessingTree(PreprocessingAstNode* tree, void(*callbackFn)(PreprocessingAstNode* node), PreprocessingAstNodeType notificationType)
+		{
+#define WALK(node) WalkPreprocessingTree(node, callbackFn, notificationType)
+			switch (tree->type)
+			{
+			case PreprocessingAstNodeType::PreprocessingFile:
+				WALK(tree->preprocessingFile.group);
+				break;
+			case PreprocessingAstNodeType::Group:
+				WALK(tree->group.thisGroupPart);
+				WALK(tree->group.nextGroupPart);
+				break;
+			case PreprocessingAstNodeType::IfSection:
+				WALK(tree->ifSection.ifGroup);
+				WALK(tree->ifSection.elifGroups);
+				WALK(tree->ifSection.elseGroup);
+				break;
+			case PreprocessingAstNodeType::IfGroup:
+				// TODO: Should we walk the constant expression here?
+				//WALK(tree->ifGroup.constantExpression);
+				WALK(tree->ifGroup.group);
+				break;
+			case PreprocessingAstNodeType::IfDefGroup:
+				WALK(tree->ifDefGroup.group);
+				break;
+			case PreprocessingAstNodeType::IfNDefGroup:
+				WALK(tree->ifNDefGroup.group);
+				break;
+			case PreprocessingAstNodeType::ElifGroups:
+				WALK(tree->elifGroups.thisElifGroup);
+				WALK(tree->elifGroups.nextElifGroup);
+				break;
+			case PreprocessingAstNodeType::ElifGroup:
+				// TODO: Same thing here?
+				//WALK(tree->elifGroup.constantExpression);
+				WALK(tree->elifGroup.group);
+				break;
+			case PreprocessingAstNodeType::ElseGroup:
+				WALK(tree->elseGroup.group);
+				break;
+			case PreprocessingAstNodeType::MacroInclude:
+				WALK(tree->macroInclude.ppTokens);
+				break;
+			case PreprocessingAstNodeType::MacroDefine:
+				WALK(tree->macroDefine.replacementList);
+				break;
+			case PreprocessingAstNodeType::MacroDefineFunction:
+				WALK(tree->macroDefineFunction.replacementList);
+				WALK(tree->macroDefineFunction.identifierList);
+				break;
+			case PreprocessingAstNodeType::MacroUndef:
+				break;
+			case PreprocessingAstNodeType::MacroLine:
+				WALK(tree->macroLine.ppTokens);
+				break;
+			case PreprocessingAstNodeType::MacroError:
+				WALK(tree->macroError.ppTokens);
+				break;
+			case PreprocessingAstNodeType::MacroPragma:
+				WALK(tree->macroPragma.ppTokens);
+				break;
+			case PreprocessingAstNodeType::TextLine:
+				WALK(tree->textLine.ppTokens);
+				break;
+			case PreprocessingAstNodeType::NonDirective:
+				WALK(tree->nonDirective.ppTokens);
+				break;
+			case PreprocessingAstNodeType::Identifier:
+				break;
+			case PreprocessingAstNodeType::IdentifierList:
+				WALK(tree->identifierList.thisIdentifierNode);
+				WALK(tree->identifierList.nextIdentifierNode);
+				break;
+			case PreprocessingAstNodeType::ReplacementList:
+				WALK(tree->replacementList.ppTokens);
+				break;
+			case PreprocessingAstNodeType::PPTokens:
+				WALK(tree->ppTokens.preprocessingToken);
+				WALK(tree->ppTokens.nextPreprocessingToken);
+				break;
+			case PreprocessingAstNodeType::NumberLiteral:
+				break;
+			case PreprocessingAstNodeType::StringLiteral:
+				break;
+			case PreprocessingAstNodeType::CharacterLiteral:
+				break;
+			case PreprocessingAstNodeType::HeaderName:
+				break;
+			case PreprocessingAstNodeType::HeaderNameString:
+				break;
+			case PreprocessingAstNodeType::EmptyMacro:
+				break;
+			case PreprocessingAstNodeType::PreprocessingOpOrPunc:
+				break;
+			case PreprocessingAstNodeType::All:
+				break;
+			case PreprocessingAstNodeType::None:
+				break;
+			default:
+				Logger::Error("Unknown tree node type: '%d' while walking preprocessing tree.", (int)tree->type);
+				break;
+			}
+
+			if (notificationType == PreprocessingAstNodeType::All || tree->type == notificationType)
+			{
+				callbackFn(tree);
+			}
+#undef WALK
+		}
+
 		// ===============================================================================================
 		// Helper functions (internal)
 		//
@@ -934,6 +1040,10 @@ namespace CppParser
 
 		static void BacktrackTo(ParserData& data, int position)
 		{
+			if (!(position >= 0 && position < data.Tokens.size()))
+			{
+				printf("HERE");
+			}
 			Logger::Assert(position >= 0 && position < data.Tokens.size(), "Invalid backtrack location.");
 			data.CurrentToken = position;
 		}
@@ -3021,6 +3131,13 @@ namespace CppParser
 			return result;
 		}
 
+		static PreprocessingAstNode* GeneratePreprocessingOpOrPuncNode(Token opOrPunc)
+		{
+			PreprocessingAstNode* result = GeneratePreprocessingAstNode(PreprocessingAstNodeType::PreprocessingOpOrPunc);
+			result->preprocessingOpOrPunc.opOrPunc = opOrPunc;
+			return result;
+		}
+
 		// ===============================================================================================
 		// Parser Forward Declarations (internal)
 		// ===============================================================================================
@@ -3332,33 +3449,11 @@ namespace CppParser
 		// It has been modified where needed.
 		// ===============================================================================================
 		// Translation Unit
-		static void RemoveSpecialTokens(ParserData& data)
-		{
-			for (auto tokenIter = data.Tokens.begin(); tokenIter != data.Tokens.end();)
-			{
-				if (tokenIter->m_Type == TokenType::PREPROCESSING_FILE_BEGIN || tokenIter->m_Type == TokenType::PREPROCESSING_FILE_END)
-				{
-					ParserString::FreeString(tokenIter->m_Lexeme);
-					tokenIter = data.Tokens.erase(tokenIter);
-				}
-				else if (tokenIter->m_Type == TokenType::END_OF_FILE && tokenIter != data.Tokens.end() - 1)
-				{
-					ParserString::FreeString(tokenIter->m_Lexeme);
-					tokenIter = data.Tokens.erase(tokenIter);
-				}
-				else
-				{
-					tokenIter++;
-				}
-			}
-		}
-
 		static AstNode* ParseTranslationUnit(const char* fileBeingParsed, std::vector<std::filesystem::path>& includeDirs, ParserData& data)
 		{
 			data.Tokens.insert(data.Tokens.begin(), CppTokens::CreateToken(-1, -1, TokenType::PREPROCESSING_FILE_BEGIN, fileBeingParsed));
 			data.Tokens.push_back(CppTokens::CreateToken(-1, -1, TokenType::PREPROCESSING_FILE_END, fileBeingParsed));
 			Preprocess(fileBeingParsed, includeDirs, data);
-			RemoveSpecialTokens(data);
 			data.CurrentToken = 0;
 			return ParseDeclarationSequence(data);
 		}
@@ -8437,6 +8532,7 @@ namespace CppParser
 		// into the tokens being processed right now.
 		// ===============================================================================================
 		// Preprocessing Stuff
+		static void ExpandIncludes(const char* fileBeingParsed, const std::vector<std::filesystem::path>& includeDirs, ParserData& data);
 		static std::vector<Token> GetTokensInAbsoluteFile(const std::filesystem::path& filepath, const std::vector<std::filesystem::path>& includeDirs, ParserData& data)
 		{
 			std::string filepathStr = filepath.string();
@@ -8449,7 +8545,7 @@ namespace CppParser
 				tokensInFile,
 				0
 			};
-			Preprocess(filepathStr.c_str(), includeDirs, preprocessedData);
+			ExpandIncludes(filepathStr.c_str(), includeDirs, preprocessedData);
 
 			return preprocessedData.Tokens;
 		}
@@ -8552,8 +8648,22 @@ namespace CppParser
 
 		static void MergeTokensAtCurrentPosition(ParserData& data, const std::vector<Token>& tokens)
 		{
-			auto currentPosition = data.Tokens.begin() + data.CurrentToken;
-			data.Tokens.insert(currentPosition, tokens.begin(), tokens.end());
+			if (tokens.size() > 0)
+			{
+				auto currentPosition = data.Tokens.begin() + data.CurrentToken;
+				data.Tokens.insert(currentPosition, tokens.begin(), tokens.end());
+			}
+		}
+
+		static void PasteReplacementListHere(ParserData& data, const std::vector<Token>& replacement)
+		{
+			if (replacement.size() > 0)
+			{
+				auto currentPosition = data.Tokens.begin() + data.CurrentToken;
+				data.Tokens.insert(currentPosition, replacement.begin(), replacement.end());
+				ParserString::FreeString(data.Tokens[data.CurrentToken + replacement.size()].m_Lexeme);
+				data.Tokens.erase(data.Tokens.begin() + data.CurrentToken + replacement.size());
+			}
 		}
 
 		static int RemoveTokensAtLine(ParserData& data, int line, std::filesystem::path filepath)
@@ -8562,7 +8672,7 @@ namespace CppParser
 			bool lookingInFile = false;
 			for (auto tokenIter = data.Tokens.begin(); tokenIter != data.Tokens.end();)
 			{
-				if (tokenIter->m_Type == TokenType::PREPROCESSING_FILE_BEGIN && std::filesystem::path(tokenIter->m_Lexeme) == filepath) 
+				if (tokenIter->m_Type == TokenType::PREPROCESSING_FILE_BEGIN && std::filesystem::path(tokenIter->m_Lexeme) == filepath)
 				{
 					lookingInFile = true;
 				}
@@ -8602,10 +8712,46 @@ namespace CppParser
 			}
 		}
 
-		static void Preprocess(const char* fileBeingParsed, const std::vector<std::filesystem::path>& includeDirs, ParserData& data)
+		static void RemoveSpecialTokens(ParserData& data)
 		{
-			data.CurrentToken = 0;
+			for (auto tokenIter = data.Tokens.begin(); tokenIter != data.Tokens.end();)
+			{
+				if (tokenIter->m_Type == TokenType::PREPROCESSING_FILE_BEGIN || tokenIter->m_Type == TokenType::PREPROCESSING_FILE_END)
+				{
+					ParserString::FreeString(tokenIter->m_Lexeme);
+					tokenIter = data.Tokens.erase(tokenIter);
+				}
+				else if (tokenIter->m_Type == TokenType::END_OF_FILE && tokenIter != data.Tokens.end() - 1)
+				{
+					ParserString::FreeString(tokenIter->m_Lexeme);
+					tokenIter = data.Tokens.erase(tokenIter);
+				}
+				else
+				{
+					tokenIter++;
+				}
+			}
+		}
+
+		static void walkSimpleMacroDefine(PreprocessingAstNode* node)
+		{
+			Symbols::AddSimpleDefine(PreprocessingSymbolTable, node->macroDefine.identifier, node->macroDefine.identifier.m_Line, node->macroDefine.replacementList);
+		}
+
+		static void walkMacroDefineFunction(PreprocessingAstNode* node)
+		{
+			Symbols::AddSimpleDefine(PreprocessingSymbolTable, node->macroDefine.identifier, node->macroDefine.identifier.m_Line, node->macroDefineFunction.replacementList);
+		}
+
+		static void walkMacroUndefine(PreprocessingAstNode* node)
+		{
+			Symbols::AddUndefine(PreprocessingSymbolTable, node->macroUndef.identifier, node->macroUndef.identifier.m_Line);
+		}
+
+		static void ExpandIncludes(const char* fileBeingParsed, const std::vector<std::filesystem::path>& includeDirs, ParserData& data)
+		{
 			int tokensSize = data.Tokens.size();
+
 			// Get all the #includes included
 			while (data.CurrentToken < tokensSize)
 			{
@@ -8650,6 +8796,64 @@ namespace CppParser
 					data.CurrentToken++;
 				}
 			}
+		}
+
+		static void ExpandDefineMacros(ParserData& data)
+		{
+			int tokensSize = data.Tokens.size();
+			data.CurrentToken = 0;
+			PreprocessingAstNode* preprocessedTree = ParsePreprocessingFile(data);
+			WalkPreprocessingTree(preprocessedTree, walkSimpleMacroDefine, PreprocessingAstNodeType::MacroDefine);
+			WalkPreprocessingTree(preprocessedTree, walkMacroDefineFunction, PreprocessingAstNodeType::MacroDefineFunction);
+			WalkPreprocessingTree(preprocessedTree, walkMacroUndefine, PreprocessingAstNodeType::MacroUndef);
+
+			data.CurrentToken = 0;
+			while (data.CurrentToken < tokensSize)
+			{
+				Token& token = GetCurrentToken(data);
+				if (GetCurrentToken(data).m_Type == TokenType::HASHTAG)
+				{
+					data.CurrentToken++;
+					// Skip all #define lines and #undef lines, that way we don't expand the macro early
+					if (GetCurrentToken(data).m_Type == TokenType::IDENTIFIER &&
+						(ParserString::Compare(GetCurrentToken(data).m_Lexeme, "undef") || ParserString::Compare(GetCurrentToken(data).m_Lexeme, "define")))
+					{
+						int currentLine = token.m_Line;
+						while (!AtEnd(data) && GetCurrentToken(data).m_Line == currentLine)
+						{
+							data.CurrentToken++;
+						}
+					}
+				}
+				else if (GetCurrentToken(data).m_Type == TokenType::IDENTIFIER && Symbols::IsSymbol(PreprocessingSymbolTable, token))
+				{
+					std::vector<Token> replacement = Symbols::ExpandMacro(PreprocessingSymbolTable, token);
+					if (replacement.size() > 0)
+					{
+						PasteReplacementListHere(data, replacement);
+						tokensSize = data.Tokens.size();
+					}
+					else
+					{
+						data.CurrentToken++;
+					}
+				}
+				else
+				{
+					data.CurrentToken++;
+				}
+			}
+		}
+
+		static void Preprocess(const char* fileBeingParsed, const std::vector<std::filesystem::path>& includeDirs, ParserData& data)
+		{
+			// Get all the #includes included
+			data.CurrentToken = 0;
+			ExpandIncludes(fileBeingParsed, includeDirs, data);
+			RemoveSpecialTokens(data);
+
+			// Expand all macros
+			ExpandDefineMacros(data);
 
 			RemoveWhitespaceTokens(data);
 		}
@@ -8667,9 +8871,10 @@ namespace CppParser
 			{
 				FreePreprocessingNode(result);
 				BacktrackTo(data, backtrackPosition);
+				return GenerateNoSuccessPreprocessingAstNode();
 			}
 
-			while (true)
+			while (!AtEnd(data))
 			{
 				PreprocessingAstNode* nextGroup = ParseGroup(data);
 				result = GenerateGroupNode(result, nextGroup);
@@ -8677,6 +8882,11 @@ namespace CppParser
 				{
 					break;
 				}
+			}
+
+			if (AtEnd(data))
+			{
+				result = GenerateGroupNode(result, GenerateNoSuccessPreprocessingAstNode());
 			}
 
 			return result;
@@ -8709,9 +8919,6 @@ namespace CppParser
 			FreePreprocessingNode(textLine);
 			BacktrackTo(data, backtrackPosition);
 
-			// TODO: Add support for non-directives they look like:
-			// TODO: #
-			// TODO: a pound symbol followed by a newline
 			return GenerateNoSuccessPreprocessingAstNode();
 		}
 
@@ -9003,10 +9210,16 @@ namespace CppParser
 
 		static PreprocessingAstNode* ParseTextLine(ParserData& data)
 		{
+			int backtrackPosition = data.CurrentToken;
 			// Optional
 			PreprocessingAstNode* ppTokens = ParsePPTokens(data);
-			Consume(data, TokenType::NEWLINE);
-			return GenerateTextLineNode(ppTokens);
+			if (Match(data, TokenType::NEWLINE))
+			{
+				return GenerateTextLineNode(ppTokens);
+			}
+
+			BacktrackTo(data, backtrackPosition);
+			return GenerateNoSuccessPreprocessingAstNode();
 		}
 
 		static PreprocessingAstNode* ParseNonDirective(ParserData& data)
@@ -9083,7 +9296,7 @@ namespace CppParser
 		// Preprocessor Stuff
 		static PreprocessingAstNode* ParsePreprocessingToken(ParserData& data)
 		{
-			if (Peek(data) == TokenType::NEWLINE)
+			if (Peek(data) == TokenType::NEWLINE || Peek(data) == TokenType::END_OF_FILE)
 			{
 				return GenerateNoSuccessPreprocessingAstNode();
 			}
@@ -9126,22 +9339,17 @@ namespace CppParser
 			FreePreprocessingNode(stringLiteral);
 			BacktrackTo(data, backtrackPosition);
 
-			if (Match(data, TokenType::DOT))
+			PreprocessingAstNode* preprocessingOpOrPunc = ParsePreprocessingOpOrPunc(data);
+			if (preprocessingOpOrPunc->success)
 			{
-				// TODO: Replace this with the correct node
-				return GenerateNoSuccessPreprocessingAstNode();// GenerateEmptyStatementNode();
+				return preprocessingOpOrPunc;
 			}
+			FreePreprocessingNode(preprocessingOpOrPunc);
+			BacktrackTo(data, backtrackPosition);
 
-			// TODO: Should I do this...?
-			//PreprocessingAstNode* preprocessingOpOrPunc = ParsePreprocessingOpOrPunc(data);
-			//if (preprocessingOpOrPunc->success)
-			//{
-			//	return preprocessingOpOrPunc;
-			//}
-			//FreePreprocessingNode(preprocessingOpOrPunc);
-			//BacktrackTo(data, backtrackPosition);
-
-			return GenerateNoSuccessPreprocessingAstNode();
+			// If nothing else succeeds, just treat the current token as an identifier because
+			// it's not a newline and it's not an EOF token
+			return GenerateIdentifierNode(ConsumeCurrent(data, Peek(data)));
 		}
 
 		static PreprocessingAstNode* ParseHeaderName(ParserData& data)
@@ -9196,8 +9404,23 @@ namespace CppParser
 			return GenerateNoSuccessPreprocessingAstNode();
 		}
 
-		// TODO: Should I do these...?
-		static PreprocessingAstNode* ParsePreprocessingOpOrPunc(ParserData& data);
+		static PreprocessingAstNode* ParsePreprocessingOpOrPunc(ParserData& data)
+		{
+			if (PeekIn(data, { TokenType::LEFT_CURLY_BRACKET, TokenType::RIGHT_CURLY_BRACKET, TokenType::LEFT_BRACKET, TokenType::RIGHT_BRACKET, TokenType::HASHTAG,
+				TokenType::LEFT_PAREN, TokenType::RIGHT_PAREN, TokenType::LEFT_ANGLE_BRACKET, TokenType::RIGHT_ANGLE_BRACKET, TokenType::COLON, TokenType::MODULO,
+				TokenType::SEMICOLON, TokenType::DOT, TokenType::KW_NEW, TokenType::KW_DELETE, TokenType::QUESTION, TokenType::STAR, TokenType::STAR, TokenType::ARROW,
+				TokenType::TILDE, TokenType::BANG, TokenType::PLUS, TokenType::DIV, TokenType::CARET, TokenType::AND, TokenType::PIPE, TokenType::EQUAL,
+				TokenType::PLUS_EQUAL, TokenType::MINUS_EQUAL, TokenType::STAR_EQUAL, TokenType::DIV_EQUAL, TokenType::MODULO_EQUAL, TokenType::CARET_EQUAL, TokenType::AND_EQUAL,
+				TokenType::PIPE_EQUAL, TokenType::LEFT_SHIFT, TokenType::RIGHT_SHIFT, TokenType::EQUAL_EQUAL, TokenType::BANG_EQUAL, TokenType::LESS_THAN_EQ, TokenType::GREATER_THAN_EQ,
+				TokenType::LOGICAL_AND, TokenType::LOGICAL_OR, TokenType::LEFT_SHIFT_EQUAL, TokenType::RIGHT_SHIFT_EQUAL, TokenType::PLUS_PLUS, TokenType::MINUS_MINUS,
+				TokenType::COMMA }))
+			{
+				return GeneratePreprocessingOpOrPuncNode(ConsumeCurrent(data, Peek(data)));
+			}
+
+			return GenerateNoSuccessPreprocessingAstNode();
+		}
+
 		static PreprocessingAstNode* ParseHCharSequence(ParserData& data);
 		static PreprocessingAstNode* ParseHChar(ParserData& data);
 		static PreprocessingAstNode* ParseQCharSequence(ParserData& data);

@@ -1,13 +1,27 @@
-#include <vector.h>
-#include <string.h>
-#include <stdio.h>
+//#include <vector.h>
+//#include <string.h>
+//#include <stdio.h>
 
-#define COMPLEX(x) do \
-{ \
-	printf("Something"); \
-} while (false)
+#define SOME_DEFINE abc()
+#define COMPLEX_DEFINE SOME_DEFINE; printf("Nothing here to see...");
 
-namespace Cocoa
+//#define COMPLEX(x) do \
+//{ \
+//	printf("Something"); \
+//} while (false)
+
+namespace SomeNamespace
+{
+	void FakeFunction()
+	{
+		COMPLEX_DEFINE;
+	}
+}
+
+#undef SOME_DEFINE
+
+SOME_DEFINE
+/*namespace Cocoa
 {
 	struct SomeStructure
 	{
@@ -104,4 +118,4 @@ namespace Cocoa
 			return average / (int)numbers.size();
 		}
 	}
-}
+}*/
