@@ -52,7 +52,7 @@ namespace CppParser
 				m_Line,
 				m_Column - (m_Cursor - m_Start),
 				m_Type,
-				lexeme
+				ParserString::CreateString(lexeme)
 			);
 		}
 
@@ -62,7 +62,7 @@ namespace CppParser
 				m_Line,
 				m_Column - (m_Cursor - m_Start),
 				TokenType::ERROR_TYPE,
-				""
+				ParserString::CreateString("")
 			);
 		}
 
@@ -72,7 +72,7 @@ namespace CppParser
 				-1,
 				-1,
 				TokenType::WHITESPACE,
-				""
+				ParserString::CreateString("")
 			);
 		}
 
@@ -82,7 +82,7 @@ namespace CppParser
 				-1,
 				-1,
 				TokenType::COMMENT,
-				""
+				ParserString::CreateString("")
 			);
 		}
 

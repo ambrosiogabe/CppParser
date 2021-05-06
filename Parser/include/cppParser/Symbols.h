@@ -6,9 +6,9 @@
 
 namespace CppParser
 {
-	struct TokenHashInfo
+	struct DefineSymbol
 	{
-		PreprocessingAstNode* replacementList;
+		PreprocessingAstNode* symbolTree;
 		Token token;
 		unsigned long hash;
 		int lineDefined;
@@ -17,20 +17,17 @@ namespace CppParser
 
 	struct PPSymbolTable
 	{
-		std::vector<TokenHashInfo> SimpleDefines;
-		std::vector<TokenHashInfo> FunctionDefines;
+		std::vector<DefineSymbol> DefineSymbols;
 	};
 
 	namespace Symbols
 	{
 		void AddUndefine(PPSymbolTable& symbolTable, const Token& token, int lineUndefined);
-		void AddSimpleDefine(PPSymbolTable& symbolTable, const Token& token, int lineDefined, PreprocessingAstNode* replacementList);
-		void AddFunctionDefine(PPSymbolTable& symbolTable, const Token& token, int lineDefined, PreprocessingAstNode* replacementList);
-		std::vector<Token> ExpandMacroFunction(const PPSymbolTable& symbolTable, PreprocessingAstNode* preprocessingNode);
-		std::vector<Token> ExpandSimpleMacro(const PPSymbolTable& symbolTable, PreprocessingAstNode* preprocessingNode, int newLine);
-		std::vector<Token> ExpandMacro(const PPSymbolTable& symbolTable, const Token& token);
+		void AddDefineSymbol(PPSymbolTable& symbolTable, const Token& macroIdentifierToken, int lineDefined, PreprocessingAstNode* symbolTree);
+		std::vector<Token> ExpandMacro(const PPSymbolTable& symbolTable, int currentToken, const std::vector<Token>& tokens);
 
 		bool IsDefined(const PPSymbolTable& symbolTable, const Token& token);
+		bool IsFunctionMacroDefine(const PPSymbolTable& symbolTable, const Token& token);
 		bool IsSymbol(const PPSymbolTable& symbolTable, const Token& token);
 	}
 }

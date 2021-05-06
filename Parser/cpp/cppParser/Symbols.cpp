@@ -9,23 +9,23 @@ namespace CppParser
 	{
 		// Internal variables
 		static unsigned long HashToken(const Token& token);
-		static bool IsSameHashData(const Token& t1, unsigned long hash1, int lineDefined, const TokenHashInfo& hash2);
+		static bool IsSameHashData(const Token& t1, unsigned long hash1, int lineDefined, const DefineSymbol& hash2);
+		static void MacroAddToReplacementList(PreprocessingAstNode* node, void* userData);
+		static std::vector<Token> ExpandSimpleMacro(const PPSymbolTable& symbolTable, PreprocessingAstNode* preprocessingNode, int newLine);
+		static void FunctionMacroAddToIdentifierList(PreprocessingAstNode* node, void* userData);
+		static std::vector<Token> ExpandFunctionMacro(const PPSymbolTable& symbolTable,
+			PreprocessingAstNode* preprocessingNode, int newLine, const std::vector<Token>& tokens, int currentToken);
+
+		// ===========================================================================================
+		// Public functions
+		// ===========================================================================================
 
 		void AddUndefine(PPSymbolTable& symbolTable, const Token& token, int lineUndefined)
 		{
 			unsigned long tokenHash = HashToken(token);
-			for (TokenHashInfo& hash : symbolTable.SimpleDefines)
+			for (DefineSymbol& hash : symbolTable.DefineSymbols)
 			{
 				if (hash.hash == tokenHash && token.m_Line != hash.lineDefined && ParserString::Compare(token.m_Lexeme, hash.token.m_Lexeme))
-				{
-					hash.lineUndefined = lineUndefined;
-					return;
-				}
-			}
-
-			for (TokenHashInfo& hash : symbolTable.FunctionDefines)
-			{
-				if (hash.hash == tokenHash)
 				{
 					hash.lineUndefined = lineUndefined;
 					return;
@@ -35,42 +35,126 @@ namespace CppParser
 			Logger::Error("Cannot undefine macro '%s'. Macro has not been defined.", token.m_Lexeme);
 		}
 
-		void AddSimpleDefine(PPSymbolTable& symbolTable, const Token& token, int lineDefined, PreprocessingAstNode* replacementList)
+		void AddDefineSymbol(PPSymbolTable& symbolTable, const Token& macroIdentifierToken, int lineDefined, PreprocessingAstNode* symbolTree)
 		{
-			unsigned long tokenHash = HashToken(token);
-			for (const TokenHashInfo& hash : symbolTable.SimpleDefines)
+			unsigned long tokenHash = HashToken(macroIdentifierToken);
+			for (const DefineSymbol& hash : symbolTable.DefineSymbols)
 			{
-				if (IsSameHashData(token, tokenHash, lineDefined, hash))
+				if (IsSameHashData(macroIdentifierToken, tokenHash, lineDefined, hash))
 				{
-					Logger::Warning("Tried to redefine macro '%s' at line %d:%d", token.m_Lexeme, token.m_Line, token.m_Column);
+					Logger::Warning("Tried to redefine macro '%s' at line %d:%d", macroIdentifierToken.m_Lexeme, macroIdentifierToken.m_Line, macroIdentifierToken.m_Column);
 					return;
 				}
 			}
 
-			symbolTable.SimpleDefines.push_back(TokenHashInfo{ replacementList, token, tokenHash, lineDefined, INT_MAX });
+			symbolTable.DefineSymbols.push_back(DefineSymbol{ symbolTree, macroIdentifierToken, tokenHash, lineDefined, INT_MAX });
 		}
 
-		void AddFunctionDefine(PPSymbolTable& symbolTable, const Token& token, int lineDefined, PreprocessingAstNode* replacementList)
+		std::vector<Token> ExpandMacro(const PPSymbolTable& symbolTable, int currentToken, const std::vector<Token>& tokens)
 		{
+			const Token& token = tokens.at(currentToken);
 			unsigned long tokenHash = HashToken(token);
-			for (const TokenHashInfo& hash : symbolTable.SimpleDefines)
+			for (const DefineSymbol& hash : symbolTable.DefineSymbols)
 			{
-				if (IsSameHashData(token, tokenHash, lineDefined, hash))
+				if (hash.hash == tokenHash && token.m_Line != hash.lineDefined && ParserString::Compare(token.m_Lexeme, hash.token.m_Lexeme))
 				{
-					Logger::Warning("Tried to redefine macro '%s' at line %d:%d", token.m_Lexeme, token.m_Line, token.m_Column);
-					return;
+					if (token.m_Line > hash.lineUndefined)
+					{
+						Logger::Error("Macro '%s' was undefined at line %d. Cannot use macro at line %d.", token.m_Lexeme, hash.lineUndefined, token.m_Line);
+						return {};
+					}
+
+					if (hash.symbolTree->type == PreprocessingAstNodeType::MacroDefine)
+					{
+						return ExpandSimpleMacro(symbolTable, hash.symbolTree, token.m_Line);
+					}
+					else if (hash.symbolTree->type == PreprocessingAstNodeType::MacroDefineFunction)
+					{
+						return ExpandFunctionMacro(symbolTable, hash.symbolTree, token.m_Line, tokens, currentToken);
+					}
 				}
 			}
 
-			symbolTable.FunctionDefines.push_back(TokenHashInfo{ replacementList, token, tokenHash, lineDefined, INT_MAX });
-		}
-
-		std::vector<Token> ExpandMacroFunction(const PPSymbolTable& symbolTable, PreprocessingAstNode* preprocessingNode)
-		{
+			Logger::Warning("Unable to expand macro '%s'", token.m_Lexeme);
 			return {};
 		}
 
-		static void AddToReplacementList(PreprocessingAstNode* node, void* userData)
+		bool IsDefined(const PPSymbolTable& symbolTable, const Token& token)
+		{
+			unsigned long tokenHash = HashToken(token);
+			for (const DefineSymbol& hash : symbolTable.DefineSymbols)
+			{
+				if (hash.hash == tokenHash)
+				{
+					return true;
+				}
+			}
+
+			return false;
+		}
+
+		bool IsSymbol(const PPSymbolTable& symbolTable, const Token& token)
+		{
+			unsigned long tokenHash = HashToken(token);
+			for (const DefineSymbol& hash : symbolTable.DefineSymbols)
+			{
+				if (hash.hash == tokenHash && token.m_Line != hash.lineDefined && ParserString::Compare(token.m_Lexeme, hash.token.m_Lexeme))
+				{
+					return true;
+				}
+			}
+
+			return false;
+		}
+
+		bool IsFunctionMacroDefine(const PPSymbolTable& symbolTable, const Token& token)
+		{
+			unsigned long tokenHash = HashToken(token);
+			for (const DefineSymbol& hash : symbolTable.DefineSymbols)
+			{
+				if (hash.hash == tokenHash && token.m_Line != hash.lineDefined && ParserString::Compare(token.m_Lexeme, hash.token.m_Lexeme))
+				{
+					if (hash.symbolTree->type == PreprocessingAstNodeType::MacroDefine)
+					{
+						return false;
+					}
+					else if (hash.symbolTree->type == PreprocessingAstNodeType::MacroDefineFunction)
+					{
+						return true;
+					}
+				}
+			}
+
+			return false;
+		}
+
+		// ===========================================================================================
+		// Private functions
+		// ===========================================================================================
+
+		static unsigned long HashToken(const Token& token)
+		{
+			unsigned long hash = 5381;
+			int c;
+
+			int strLength = ParserString::StringLength(token.m_Lexeme);
+			for (int i = 0; i < strLength; i++)
+				hash = ((hash << 5) + hash) + token.m_Lexeme[i]; /* hash * 33 + c */
+
+			return hash;
+		}
+
+		static bool IsSameHashData(const Token& t1, unsigned long hash1, int lineDefined, const DefineSymbol& hash2)
+		{
+			if (hash2.hash == hash1 && ParserString::Compare(hash2.token.m_Lexeme, t1.m_Lexeme) && hash2.lineDefined == lineDefined)
+			{
+				return true;
+			}
+
+			return false;
+		}
+
+		static void MacroAddToReplacementList(PreprocessingAstNode* node, void* userData)
 		{
 			Logger::Assert(userData != nullptr, "Invalid replacement list user data while replacing macro.");
 
@@ -117,10 +201,10 @@ namespace CppParser
 			}
 		}
 
-		std::vector<Token> ExpandSimpleMacro(const PPSymbolTable& symbolTable, PreprocessingAstNode* preprocessingNode, int newLine)
+		static std::vector<Token> ExpandSimpleMacro(const PPSymbolTable& symbolTable, PreprocessingAstNode* preprocessingNode, int newLine)
 		{
 			std::vector<Token> replacementListResult;
-			Parser::WalkPreprocessingTree(preprocessingNode, &replacementListResult, AddToReplacementList);
+			Parser::WalkPreprocessingTree(preprocessingNode->macroDefine.replacementList, &replacementListResult, MacroAddToReplacementList);
 			for (Token& token : replacementListResult)
 			{
 				token.m_Line = newLine;
@@ -128,95 +212,109 @@ namespace CppParser
 			return replacementListResult;
 		}
 
-		std::vector<Token> ExpandMacro(const PPSymbolTable& symbolTable, const Token& token)
+		static void FunctionMacroAddToIdentifierList(PreprocessingAstNode* node, void* userData)
 		{
-			unsigned long tokenHash = HashToken(token);
-			for (const TokenHashInfo& hash : symbolTable.SimpleDefines)
+			Logger::Assert(userData != nullptr, "Invalid replacement list user data while replacing macro.");
+
+			std::vector<Token>* replacementListResult = (std::vector<Token>*)userData;
+			if (node->type == PreprocessingAstNodeType::Identifier)
 			{
-				if (hash.hash == tokenHash && token.m_Line != hash.lineDefined && ParserString::Compare(token.m_Lexeme, hash.token.m_Lexeme))
+				replacementListResult->push_back(node->identifier.identifier);
+			}
+			else if (node->type == PreprocessingAstNodeType::IdentifierList)
+			{
+				return;
+			}
+			else
+			{
+				Logger::Warning("Ran into non-identifier in macro function identifier list.");
+			}
+		}
+
+		static struct FunctionMacroDTO
+		{
+			std::vector<Token>& functionIdentifiers;
+			std::vector<Token>& replacementListResult;
+		};
+
+		static std::vector<Token> ExpandFunctionMacro(const PPSymbolTable& symbolTable,
+			PreprocessingAstNode* preprocessingNode, int newLine, const std::vector<Token>& tokens, int currentToken)
+		{
+			std::vector<Token> functionIdentifiers;
+			std::vector<Token> replacementListResult;
+			// Get function identifiers
+			Parser::WalkPreprocessingTree(preprocessingNode->macroDefineFunction.identifierList, &functionIdentifiers, FunctionMacroAddToIdentifierList);
+
+			// Replace function identifiers here
+			Parser::WalkPreprocessingTree(preprocessingNode, &replacementListResult, MacroAddToReplacementList);
+
+			int tokensSize = tokens.size();
+			currentToken++;
+			Logger::Assert(currentToken < tokensSize&& tokens[currentToken].m_Type == TokenType::LEFT_PAREN, "Macro function definition must begin with a left parenthesis");
+			currentToken++;
+			int replacementListTokenStart = currentToken;
+
+			int replacementListResultIndex = 0;
+			for (Token& token : replacementListResult)
+			{
+				int parameterIndex = 0;
+				currentToken = replacementListTokenStart;
+				for (Token& identifier : functionIdentifiers)
 				{
-					if (token.m_Line > hash.lineUndefined)
+					// If we have the same lexeme here
+					if (ParserString::Compare(identifier.m_Lexeme, token.m_Lexeme))
 					{
-						Logger::Error("Macro '%s' was undefined at line %d. Cannot use macro at line %d.", token.m_Lexeme, hash.lineUndefined, token.m_Line);
-						return {};
+						std::vector<Token> replacementForIdentifier;
+						int argumentIndex = 0;
+						bool atParameter = parameterIndex == argumentIndex;
+						// Replace the lexeme with the actual tokens that would have been supplied
+						int grouping = 0;
+						while (currentToken < tokensSize)
+						{
+							const Token& replacement = tokens[currentToken];
+							if (replacement.m_Type == TokenType::LEFT_PAREN)
+							{
+								grouping++;
+							}
+							else if (replacement.m_Type == TokenType::RIGHT_PAREN)
+							{
+								grouping--;
+								if (grouping < 0)
+								{
+									break;
+								}
+							}
+							else if (replacement.m_Type == TokenType::COMMA && grouping <= 0)
+							{
+								if (atParameter)
+								{
+									break;
+								}
+								argumentIndex++;
+								if (argumentIndex > parameterIndex)
+								{
+									break;
+								}
+							}
+
+							if (atParameter)
+							{
+								replacementForIdentifier.push_back(replacement);
+							}
+							currentToken++;
+							atParameter = parameterIndex == argumentIndex;
+						}
+
+						replacementListResult.erase(replacementListResult.begin() + replacementListResultIndex);
+						replacementListResult.insert(replacementListResult.begin() + replacementListResultIndex, replacementForIdentifier.begin(), replacementForIdentifier.end());
+						break;
 					}
-					return ExpandSimpleMacro(symbolTable, hash.replacementList, token.m_Line);
+					parameterIndex++;
 				}
+				token.m_Line = newLine;
+				replacementListResultIndex++;
 			}
-
-			for (const TokenHashInfo& hash : symbolTable.FunctionDefines)
-			{
-				if (hash.hash == tokenHash)
-				{
-					if (token.m_Line > hash.lineUndefined)
-					{
-						Logger::Error("Macro '%s' was undefined at line %d. Cannot use macro at line %d.", token.m_Lexeme, hash.lineUndefined, token.m_Line);
-						return {};
-					}
-					return ExpandMacroFunction(symbolTable, hash.replacementList);
-				}
-			}
-
-			Logger::Warning("Unable to expand macro '%s'", token.m_Lexeme);
-			return {};
-		}
-
-		bool IsDefined(const PPSymbolTable& symbolTable, const Token& token)
-		{
-			unsigned long tokenHash = HashToken(token);
-			for (const TokenHashInfo& hash : symbolTable.SimpleDefines)
-			{
-				if (hash.hash == tokenHash)
-				{
-					return true;
-				}
-			}
-
-			return false;
-		}
-
-		bool IsSymbol(const PPSymbolTable& symbolTable, const Token& token)
-		{
-			unsigned long tokenHash = HashToken(token);
-			for (const TokenHashInfo& hash : symbolTable.SimpleDefines)
-			{
-				if (hash.hash == tokenHash && token.m_Line != hash.lineDefined && ParserString::Compare(token.m_Lexeme, hash.token.m_Lexeme))
-				{
-					return true;
-				}
-			}
-
-			for (const TokenHashInfo& hash : symbolTable.FunctionDefines)
-			{
-				if (hash.hash == tokenHash)
-				{
-					return true;
-				}
-			}
-
-			return false;
-		}
-
-		static unsigned long HashToken(const Token& token)
-		{
-			unsigned long hash = 5381;
-			int c;
-
-			int strLength = ParserString::StringLength(token.m_Lexeme);
-			for (int i = 0; i < strLength; i++)
-				hash = ((hash << 5) + hash) + token.m_Lexeme[i]; /* hash * 33 + c */
-
-			return hash;
-		}
-
-		static bool IsSameHashData(const Token& t1, unsigned long hash1, int lineDefined, const TokenHashInfo& hash2)
-		{
-			if (hash2.hash == hash1 && ParserString::Compare(hash2.token.m_Lexeme, t1.m_Lexeme) && hash2.lineDefined == lineDefined)
-			{
-				return true;
-			}
-
-			return false;
+			return replacementListResult;
 		}
 	}
 }

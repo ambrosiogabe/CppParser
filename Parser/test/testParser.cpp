@@ -4,11 +4,14 @@
 
 #define SOME_DEFINE abc()
 #define COMPLEX_DEFINE SOME_DEFINE; printf("Nothing here to see...");
+#define MACRO_FUN(a, b, c) a * b * c; printf("%d %d %d", a, b, c);
 
 //#define COMPLEX(x) do \
 //{ \
 //	printf("Something"); \
 //} while (false)
+
+MACRO_FUN(1, 2, 3)
 
 namespace SomeNamespace
 {

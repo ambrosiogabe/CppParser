@@ -8688,14 +8688,39 @@ namespace CppParser
 			}
 		}
 
-		static void PasteReplacementListHere(ParserData& data, const std::vector<Token>& replacement)
+		static void PasteReplacementListHere(ParserData& data, const std::vector<Token>& replacement, bool isFunctionMacro)
 		{
 			if (replacement.size() > 0)
 			{
 				auto currentPosition = data.Tokens.begin() + data.CurrentToken;
 				data.Tokens.insert(currentPosition, replacement.begin(), replacement.end());
-				ParserString::FreeString(data.Tokens[data.CurrentToken + replacement.size()].m_Lexeme);
-				data.Tokens.erase(data.Tokens.begin() + data.CurrentToken + replacement.size());
+				int macroTokenLength = 1;
+				if (isFunctionMacro)
+				{
+					int tmpCursor = data.CurrentToken + replacement.size();
+					int tokensSize = data.Tokens.size();
+					int grouping = 0;
+					Logger::Assert(tmpCursor + 1 < tokensSize && data.Tokens[tmpCursor + 1].m_Type == TokenType::LEFT_PAREN, "Invalid function macro. Must begin with a '('");
+					while (tmpCursor < tokensSize)
+					{
+						ParserString::FreeString(data.Tokens[tmpCursor].m_Lexeme);
+						if (data.Tokens[tmpCursor].m_Type == TokenType::LEFT_PAREN)
+						{
+							grouping++;
+						}
+						else if (data.Tokens[tmpCursor].m_Type == TokenType::RIGHT_PAREN)
+						{
+							grouping--;
+							if (grouping <= 0)
+							{
+								break;
+							}
+						}
+						macroTokenLength++;
+						tmpCursor++;
+					}
+				}
+				data.Tokens.erase(data.Tokens.begin() + data.CurrentToken + replacement.size(), data.Tokens.begin() + data.CurrentToken + replacement.size() + macroTokenLength);
 			}
 		}
 
@@ -8768,12 +8793,12 @@ namespace CppParser
 
 		static void walkSimpleMacroDefine(PreprocessingAstNode* node)
 		{
-			Symbols::AddSimpleDefine(PreprocessingSymbolTable, node->macroDefine.identifier, node->macroDefine.identifier.m_Line, node->macroDefine.replacementList);
+			Symbols::AddDefineSymbol(PreprocessingSymbolTable, node->macroDefine.identifier, node->macroDefine.identifier.m_Line, node);
 		}
 
 		static void walkMacroDefineFunction(PreprocessingAstNode* node)
 		{
-			Symbols::AddSimpleDefine(PreprocessingSymbolTable, node->macroDefine.identifier, node->macroDefine.identifier.m_Line, node->macroDefineFunction.replacementList);
+			Symbols::AddDefineSymbol(PreprocessingSymbolTable, node->macroDefine.identifier, node->macroDefine.identifier.m_Line, node);
 		}
 
 		static void walkMacroUndefine(PreprocessingAstNode* node)
@@ -8860,10 +8885,10 @@ namespace CppParser
 				}
 				else if (GetCurrentToken(data).m_Type == TokenType::IDENTIFIER && Symbols::IsSymbol(PreprocessingSymbolTable, token))
 				{
-					std::vector<Token> replacement = Symbols::ExpandMacro(PreprocessingSymbolTable, token);
+					std::vector<Token> replacement = Symbols::ExpandMacro(PreprocessingSymbolTable, data.CurrentToken, data.Tokens);
 					if (replacement.size() > 0)
 					{
-						PasteReplacementListHere(data, replacement);
+						PasteReplacementListHere(data, replacement, Symbols::IsFunctionMacroDefine(PreprocessingSymbolTable, token));
 						tokensSize = data.Tokens.size();
 					}
 					else
