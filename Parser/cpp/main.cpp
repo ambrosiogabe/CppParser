@@ -23,7 +23,7 @@ int main()
 	ScriptScanner::DebugPrint(tokens);
 	std::vector<std::filesystem::path> includeDirs = {};
 	AstNode* parseTree = Parser::Parse("testParser.cpp", includeDirs, tokens);
-	Parser::WalkTree(parseTree, CppParser::PrintClasses, AstNodeType::ClassVirtualHead);
+	Parser::WalkTree(parseTree, CppParser::PrintClasses, false, AstNodeType::ClassVirtualHead);
 	Parser::FreeTree(parseTree);
 
 	return 0;

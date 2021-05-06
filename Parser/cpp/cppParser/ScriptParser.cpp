@@ -49,7 +49,7 @@ namespace CppParser
 
 		static void FreeNode(AstNode* node)
 		{
-			WalkTree(node, FreeNodeCallback);
+			WalkTree(node, FreeNodeCallback, AstNodeType::All, true);
 		}
 
 		static void FreePreprocessingNodeCallback(PreprocessingAstNode* tree)
@@ -59,7 +59,7 @@ namespace CppParser
 
 		static void FreePreprocessingNode(PreprocessingAstNode* node)
 		{
-			WalkPreprocessingTree(node, FreePreprocessingNodeCallback);
+			WalkPreprocessingTree(node, FreePreprocessingNodeCallback, PreprocessingAstNodeType::All, true);
 		}
 
 		// =============================================================================================
@@ -78,9 +78,35 @@ namespace CppParser
 		// These will recursively walk preprocessing, or regular ast trees and call the callback function
 		// indicated by the notification type
 		// ===============================================================================================
-		void WalkTree(AstNode* tree, void(*callbackFn)(AstNode* node), AstNodeType notificationType)
+		// TODO: Is there a better way to do this function callback with default parameter?
+		static void WalkTreeDefaultUserData(AstNode* tree, void* userData)
 		{
-#define WALK(node) WalkTree(node, callbackFn, notificationType)
+			((AstWalkTreeCallbackFn)(userData))(tree);
+		}
+
+		void WalkTree(AstNode* tree, AstWalkTreeCallbackFn callbackFn, AstNodeType notificationType, bool postTraversalCallback)
+		{
+			WalkTree(tree, callbackFn, WalkTreeDefaultUserData, notificationType, postTraversalCallback);
+		}
+
+		static void WalkPpTreeDefaultUserData(PreprocessingAstNode* tree, void* userData)
+		{
+			((AstWalkPpTreeCallbackFn)(userData))(tree);
+		}
+
+		void WalkPreprocessingTree(PreprocessingAstNode* tree, AstWalkPpTreeCallbackFn callbackFn, PreprocessingAstNodeType notificationType, bool postTraversalCallback)
+		{
+			WalkPreprocessingTree(tree, callbackFn, WalkPpTreeDefaultUserData, notificationType, postTraversalCallback);
+		}
+
+		void WalkTree(AstNode* tree, void* userData, AstWalkTreeUserDataCallbackFn callbackFn, AstNodeType notificationType, bool postTraversalCallback)
+		{
+			if (!postTraversalCallback && (notificationType == AstNodeType::All || tree->type == notificationType))
+			{
+				callbackFn(tree, userData);
+			}
+
+#define WALK(node) WalkTree(node, userData, callbackFn, notificationType, postTraversalCallback)
 			switch (tree->type)
 			{
 			case AstNodeType::BracedInitList:
@@ -892,16 +918,22 @@ namespace CppParser
 				break;
 			}
 
-			if (notificationType == AstNodeType::All || tree->type == notificationType)
+			if (postTraversalCallback && (notificationType == AstNodeType::All || tree->type == notificationType))
 			{
-				callbackFn(tree);
+				callbackFn(tree, userData);
 			}
 #undef WALK
 		}
 
-		void WalkPreprocessingTree(PreprocessingAstNode* tree, void(*callbackFn)(PreprocessingAstNode* node), PreprocessingAstNodeType notificationType)
+		void WalkPreprocessingTree(PreprocessingAstNode* tree, void* userData, AstWalkPpTreeUserDataCallbackFn callbackFn, 
+			PreprocessingAstNodeType notificationType, bool postTraversalCallback)
 		{
-#define WALK(node) WalkPreprocessingTree(node, callbackFn, notificationType)
+			if (!postTraversalCallback && (notificationType == PreprocessingAstNodeType::All || tree->type == notificationType))
+			{
+				callbackFn(tree, userData);
+			}
+
+#define WALK(node) WalkPreprocessingTree(node, userData, callbackFn, notificationType, postTraversalCallback)
 			switch (tree->type)
 			{
 			case PreprocessingAstNodeType::PreprocessingFile:
@@ -1002,9 +1034,9 @@ namespace CppParser
 				break;
 			}
 
-			if (notificationType == PreprocessingAstNodeType::All || tree->type == notificationType)
+			if (postTraversalCallback && (notificationType == PreprocessingAstNodeType::All || tree->type == notificationType))
 			{
-				callbackFn(tree);
+				callbackFn(tree, userData);
 			}
 #undef WALK
 		}
@@ -1042,6 +1074,7 @@ namespace CppParser
 		{
 			if (!(position >= 0 && position < data.Tokens.size()))
 			{
+				// TODO: Remove me!
 				printf("HERE");
 			}
 			Logger::Assert(position >= 0 && position < data.Tokens.size(), "Invalid backtrack location.");
@@ -8803,9 +8836,9 @@ namespace CppParser
 			int tokensSize = data.Tokens.size();
 			data.CurrentToken = 0;
 			PreprocessingAstNode* preprocessedTree = ParsePreprocessingFile(data);
-			WalkPreprocessingTree(preprocessedTree, walkSimpleMacroDefine, PreprocessingAstNodeType::MacroDefine);
-			WalkPreprocessingTree(preprocessedTree, walkMacroDefineFunction, PreprocessingAstNodeType::MacroDefineFunction);
-			WalkPreprocessingTree(preprocessedTree, walkMacroUndefine, PreprocessingAstNodeType::MacroUndef);
+			WalkPreprocessingTree(preprocessedTree, walkSimpleMacroDefine, PreprocessingAstNodeType::MacroDefine, false);
+			WalkPreprocessingTree(preprocessedTree, walkMacroDefineFunction, PreprocessingAstNodeType::MacroDefineFunction, false);
+			WalkPreprocessingTree(preprocessedTree, walkMacroUndefine, PreprocessingAstNodeType::MacroUndef, false);
 
 			data.CurrentToken = 0;
 			while (data.CurrentToken < tokensSize)
