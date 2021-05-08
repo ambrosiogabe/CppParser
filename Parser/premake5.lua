@@ -12,11 +12,13 @@ project "CppParser"
 
 	files {
         "cpp/**.cpp",
-        "include/**.h"
+        "include/**.h",
+        "vendor/CppUtils/SingleInclude/**.h"
     }
 
     includedirs {
-        "include"
+        "include",
+        "vendor/CppUtils/SingleInclude"
     }
     
     filter { "system:Unix", "system:Mac" }

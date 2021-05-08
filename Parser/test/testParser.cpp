@@ -2,14 +2,13 @@
 //#include <string.h>
 //#include <stdio.h>
 
-#define SOME_DEFINE abc()
-#define COMPLEX_DEFINE SOME_DEFINE; printf("Nothing here to see...");
-#define MACRO_FUN(a, b, c) a * b * c; printf("%d %d %d", a, b, c);
+#define min(X, Y)  ((X) < (Y) ? (X) : (Y))
+int a = 0;
+int b = 0;
+int x = min(a, b);
 
-//#define COMPLEX(x) do \
-//{ \
-//	printf("Something"); \
-//} while (false)
+#define macro(something, somethingElse) something; somethingElse;
+macro(array[x = y, x + 1]);
 
 MACRO_FUN(1, 2, 3)
 

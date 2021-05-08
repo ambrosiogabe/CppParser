@@ -158,37 +158,37 @@ namespace CppParser
 		{
 			Logger::Assert(userData != nullptr, "Invalid replacement list user data while replacing macro.");
 
-			std::vector<Token>* replacementListResult = (std::vector<Token>*)userData;
+			std::vector<Token>& replacementListResult = *(std::vector<Token>*)userData;
 			if (node->type == PreprocessingAstNodeType::PPTokens)
 			{
 				PreprocessingAstNode* ppToken = node->ppTokens.preprocessingToken;
 				if (ppToken->type == PreprocessingAstNodeType::Identifier)
 				{
-					replacementListResult->push_back(ppToken->identifier.identifier);
+					replacementListResult.push_back(ppToken->identifier.identifier);
 				}
 				else if (ppToken->type == PreprocessingAstNodeType::PreprocessingOpOrPunc)
 				{
-					replacementListResult->push_back(ppToken->preprocessingOpOrPunc.opOrPunc);
+					replacementListResult.push_back(ppToken->preprocessingOpOrPunc.opOrPunc);
 				}
 				else if (ppToken->type == PreprocessingAstNodeType::HeaderName)
 				{
-					replacementListResult->push_back(ppToken->headerName.identifier);
+					replacementListResult.push_back(ppToken->headerName.identifier);
 				}
 				else if (ppToken->type == PreprocessingAstNodeType::HeaderNameString)
 				{
-					replacementListResult->push_back(ppToken->headerNameString.stringLiteral);
+					replacementListResult.push_back(ppToken->headerNameString.stringLiteral);
 				}
 				else if (ppToken->type == PreprocessingAstNodeType::NumberLiteral)
 				{
-					replacementListResult->push_back(ppToken->numberLiteral.numberLiteral);
+					replacementListResult.push_back(ppToken->numberLiteral.numberLiteral);
 				}
 				else if (ppToken->type == PreprocessingAstNodeType::CharacterLiteral)
 				{
-					replacementListResult->push_back(ppToken->characterLiteral.characterLiteral);
+					replacementListResult.push_back(ppToken->characterLiteral.characterLiteral);
 				}
 				else if (ppToken->type == PreprocessingAstNodeType::StringLiteral)
 				{
-					replacementListResult->push_back(ppToken->stringLiteral.stringLiteral);
+					replacementListResult.push_back(ppToken->stringLiteral.stringLiteral);
 				}
 				else if (ppToken->type == PreprocessingAstNodeType::PPTokens || ppToken->type == PreprocessingAstNodeType::None)
 				{
@@ -204,7 +204,7 @@ namespace CppParser
 		static std::vector<Token> ExpandSimpleMacro(const PPSymbolTable& symbolTable, PreprocessingAstNode* preprocessingNode, int newLine)
 		{
 			std::vector<Token> replacementListResult;
-			Parser::WalkPreprocessingTree(preprocessingNode->macroDefine.replacementList, &replacementListResult, MacroAddToReplacementList);
+			Parser::WalkPreprocessingTree(preprocessingNode->macroDefine.replacementList, (void*)&replacementListResult, MacroAddToReplacementList);
 			for (Token& token : replacementListResult)
 			{
 				token.m_Line = newLine;
@@ -216,10 +216,10 @@ namespace CppParser
 		{
 			Logger::Assert(userData != nullptr, "Invalid replacement list user data while replacing macro.");
 
-			std::vector<Token>* replacementListResult = (std::vector<Token>*)userData;
+			std::vector<Token>& replacementListResult = *(std::vector<Token>*)userData;
 			if (node->type == PreprocessingAstNodeType::Identifier)
 			{
-				replacementListResult->push_back(node->identifier.identifier);
+				replacementListResult.push_back(node->identifier.identifier);
 			}
 			else if (node->type == PreprocessingAstNodeType::IdentifierList)
 			{
@@ -243,10 +243,10 @@ namespace CppParser
 			std::vector<Token> functionIdentifiers;
 			std::vector<Token> replacementListResult;
 			// Get function identifiers
-			Parser::WalkPreprocessingTree(preprocessingNode->macroDefineFunction.identifierList, &functionIdentifiers, FunctionMacroAddToIdentifierList);
+			Parser::WalkPreprocessingTree(preprocessingNode->macroDefineFunction.identifierList, (void*)&functionIdentifiers, FunctionMacroAddToIdentifierList);
 
 			// Replace function identifiers here
-			Parser::WalkPreprocessingTree(preprocessingNode, &replacementListResult, MacroAddToReplacementList);
+			Parser::WalkPreprocessingTree(preprocessingNode, (void*)&replacementListResult, MacroAddToReplacementList);
 
 			int tokensSize = tokens.size();
 			currentToken++;
@@ -254,9 +254,9 @@ namespace CppParser
 			currentToken++;
 			int replacementListTokenStart = currentToken;
 
-			int replacementListResultIndex = 0;
-			for (Token& token : replacementListResult)
+			for (int i = 0; i < replacementListResult.size(); i++)
 			{
+				Token& token = replacementListResult.at(i);
 				int parameterIndex = 0;
 				currentToken = replacementListTokenStart;
 				for (Token& identifier : functionIdentifiers)
@@ -305,14 +305,24 @@ namespace CppParser
 							atParameter = parameterIndex == argumentIndex;
 						}
 
-						replacementListResult.erase(replacementListResult.begin() + replacementListResultIndex);
-						replacementListResult.insert(replacementListResult.begin() + replacementListResultIndex, replacementForIdentifier.begin(), replacementForIdentifier.end());
+						replacementListResult.erase(replacementListResult.begin() + i);
+						if (i == replacementListResult.size() - 1)
+						{
+							int replacementForIdentifierSize = replacementForIdentifier.size();
+							for (auto iter = replacementForIdentifier.begin(); iter != replacementForIdentifier.end(); iter++)
+							{
+								replacementListResult.push_back(*iter);
+							}
+						}
+						else
+						{
+							replacementListResult.insert(replacementListResult.begin() + i, replacementForIdentifier.begin(), replacementForIdentifier.end());
+						}
 						break;
 					}
 					parameterIndex++;
 				}
 				token.m_Line = newLine;
-				replacementListResultIndex++;
 			}
 			return replacementListResult;
 		}

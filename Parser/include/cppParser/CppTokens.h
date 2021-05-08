@@ -59,8 +59,7 @@ namespace CppParser
 		int m_Line;
 		int m_Column;
 		TokenType m_Type;
-		// TODO: should either be made `const char*` or not assigned `const char*`s.
-		char* m_Lexeme;
+		const char* m_Lexeme;
 		// void* m_Literal;
 	};
 

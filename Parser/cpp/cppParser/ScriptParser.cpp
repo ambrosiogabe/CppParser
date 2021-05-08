@@ -4,6 +4,7 @@
 #include "cppParser/ScriptScanner.h"
 #include "cppParser/Logger.h"
 #include "cppParser/Symbols.h"
+#include "cppParser/DynamicArray.h"
 
 #include <algorithm>
 #include <cstring>
@@ -17,13 +18,13 @@ namespace CppParser
 		static std::vector<std::filesystem::path> FilesSeen = {};
 		struct ParserData
 		{
-			std::vector<Token> Tokens;
+			DynamicArray<Token> Tokens;
 			int CurrentToken;
 		};
 
 		static AstNode* ParseTranslationUnit(const char* fileBeingParsed, std::vector<std::filesystem::path>& includeDirs, ParserData& data);
 
-		AstNode* Parse(const char* fileBeingParsed, std::vector<std::filesystem::path>& includeDirs, std::vector<Token>& tokens)
+		AstNode* Parse(const char* fileBeingParsed, std::vector<std::filesystem::path>& includeDirs, DynamicArray<Token>& tokens)
 		{
 			FilesSeen.clear();
 			ParserData data = {
@@ -925,7 +926,7 @@ namespace CppParser
 #undef WALK
 		}
 
-		void WalkPreprocessingTree(PreprocessingAstNode* tree, void* userData, AstWalkPpTreeUserDataCallbackFn callbackFn, 
+		void WalkPreprocessingTree(PreprocessingAstNode* tree, void* userData, AstWalkPpTreeUserDataCallbackFn callbackFn,
 			PreprocessingAstNodeType notificationType, bool postTraversalCallback)
 		{
 			if (!postTraversalCallback && (notificationType == PreprocessingAstNodeType::All || tree->type == notificationType))
@@ -1048,12 +1049,12 @@ namespace CppParser
 		// ===============================================================================================
 		static bool AtEnd(ParserData& data)
 		{
-			return data.CurrentToken == data.Tokens.size();
+			return data.CurrentToken >= data.Tokens.m_NumElements;
 		}
 
 		static void ErrorAtToken(ParserData& data)
 		{
-			Token& currentToken = AtEnd(data) ? data.Tokens[data.Tokens.size() - 1] : data.Tokens[data.CurrentToken];
+			Token& currentToken = AtEnd(data) ? data.Tokens[data.Tokens.m_NumElements - 1] : data.Tokens[data.CurrentToken];
 			Logger::Error("Unexpected token '%s' at line %d:%d", ScriptScanner::TokenName(currentToken.m_Type), currentToken.m_Line, currentToken.m_Column);
 		}
 
@@ -1072,18 +1073,22 @@ namespace CppParser
 
 		static void BacktrackTo(ParserData& data, int position)
 		{
-			if (!(position >= 0 && position < data.Tokens.size()))
+			if (!(position >= 0 && position < data.Tokens.m_NumElements))
 			{
 				// TODO: Remove me!
 				printf("HERE");
 			}
-			Logger::Assert(position >= 0 && position < data.Tokens.size(), "Invalid backtrack location.");
+			Logger::Assert(position >= 0 && position < data.Tokens.m_NumElements, "Invalid backtrack location.");
 			data.CurrentToken = position;
 		}
 
 		static bool Match(ParserData& data, TokenType type)
 		{
-			Token& currentToken = AtEnd(data) ? data.Tokens[data.Tokens.size() - 1] : data.Tokens[data.CurrentToken];
+			if (AtEnd(data))
+			{
+				return false;
+			}
+			Token& currentToken = data.Tokens[data.CurrentToken];
 			if (currentToken.m_Type == type)
 			{
 				data.CurrentToken++;
@@ -1095,7 +1100,7 @@ namespace CppParser
 
 		static Token ConsumeCurrent(ParserData& data, TokenType type)
 		{
-			Token& currentToken = AtEnd(data) ? data.Tokens[data.Tokens.size() - 1] : data.Tokens[data.CurrentToken];
+			Token& currentToken = AtEnd(data) ? data.Tokens[data.Tokens.m_NumElements - 1] : data.Tokens[data.CurrentToken];
 			if (currentToken.m_Type == type)
 			{
 				data.CurrentToken++;
@@ -1112,7 +1117,7 @@ namespace CppParser
 
 		static Token GetCurrentToken(ParserData& data)
 		{
-			return AtEnd(data) ? data.Tokens[data.Tokens.size() - 1] : data.Tokens[data.CurrentToken];
+			return AtEnd(data) ? data.Tokens[data.Tokens.m_NumElements - 1] : data.Tokens[data.CurrentToken];
 		}
 
 		static bool IsAssignmentOperator(TokenType type)
@@ -1124,7 +1129,7 @@ namespace CppParser
 
 		static TokenType Peek(ParserData& data)
 		{
-			return AtEnd(data) ? data.Tokens[data.Tokens.size() - 1].m_Type : data.Tokens[data.CurrentToken].m_Type;
+			return AtEnd(data) ? data.Tokens[data.Tokens.m_NumElements - 1].m_Type : data.Tokens[data.CurrentToken].m_Type;
 		}
 
 		static bool PeekIn(ParserData& data, std::initializer_list<TokenType> tokenTypes)
@@ -1155,7 +1160,7 @@ namespace CppParser
 					return true;
 				}
 				token++;
-				if (token >= data.Tokens.size())
+				if (token >= data.Tokens.m_NumElements)
 				{
 					return false;
 				}
@@ -1177,12 +1182,12 @@ namespace CppParser
 					return false;
 				}
 
-				if (iter.m_Type == type1 && token < data.Tokens.size() && data.Tokens[token + 1].m_Type == nextType)
+				if (iter.m_Type == type1 && token < data.Tokens.m_NumElements && data.Tokens[token + 1].m_Type == nextType)
 				{
 					return true;
 				}
 				token++;
-				if (token >= data.Tokens.size())
+				if (token >= data.Tokens.m_NumElements)
 				{
 					return false;
 				}
@@ -3459,11 +3464,11 @@ namespace CppParser
 		static PreprocessingAstNode* ParseNonDirective(ParserData& data);
 		static PreprocessingAstNode* ParseIdentifierList(ParserData& data);
 		static PreprocessingAstNode* ParseReplacementList(ParserData& data);
-		static PreprocessingAstNode* ParsePPTokens(ParserData& data);
+		static PreprocessingAstNode* ParsePPTokens(ParserData& data, bool isHeader = false);
 		static PreprocessingAstNode* ParseNumberLiteral(ParserData& data);
 
 		// Preprocessor Stuff
-		static PreprocessingAstNode* ParsePreprocessingToken(ParserData& data);
+		static PreprocessingAstNode* ParsePreprocessingToken(ParserData& data, bool isHeader = false);
 		static PreprocessingAstNode* ParseHeaderName(ParserData& data);
 		static PreprocessingAstNode* ParseCharacterLiteral(ParserData& data);
 		static PreprocessingAstNode* ParseUserDefinedCharacterLiteral(ParserData& data);
@@ -3484,8 +3489,8 @@ namespace CppParser
 		// Translation Unit
 		static AstNode* ParseTranslationUnit(const char* fileBeingParsed, std::vector<std::filesystem::path>& includeDirs, ParserData& data)
 		{
-			data.Tokens.insert(data.Tokens.begin(), CppTokens::CreateToken(-1, -1, TokenType::PREPROCESSING_FILE_BEGIN, fileBeingParsed));
-			data.Tokens.push_back(CppTokens::CreateToken(-1, -1, TokenType::PREPROCESSING_FILE_END, fileBeingParsed));
+			NDynamicArray::Insert(data.Tokens, CppTokens::CreateToken(-1, -1, TokenType::PREPROCESSING_FILE_BEGIN, fileBeingParsed), 0);
+			NDynamicArray::Add(data.Tokens, CppTokens::CreateToken(-1, -1, TokenType::PREPROCESSING_FILE_END, fileBeingParsed));
 			Preprocess(fileBeingParsed, includeDirs, data);
 			data.CurrentToken = 0;
 			return ParseDeclarationSequence(data);
@@ -8566,14 +8571,14 @@ namespace CppParser
 		// ===============================================================================================
 		// Preprocessing Stuff
 		static void ExpandIncludes(const char* fileBeingParsed, const std::vector<std::filesystem::path>& includeDirs, ParserData& data);
-		static std::vector<Token> GetTokensInAbsoluteFile(const std::filesystem::path& filepath, const std::vector<std::filesystem::path>& includeDirs, ParserData& data)
+		static DynamicArray<Token> GetTokensInAbsoluteFile(const std::filesystem::path& filepath, const std::vector<std::filesystem::path>& includeDirs, ParserData& data)
 		{
 			std::string filepathStr = filepath.string();
 			Logger::Info("Getting tokens from included file in '%s'", filepathStr.c_str());
 
-			std::vector<Token> tokensInFile = ScriptScanner::ScanTokens(filepathStr.c_str());
-			tokensInFile.insert(tokensInFile.begin(), CppTokens::CreateToken(-1, -1, TokenType::PREPROCESSING_FILE_BEGIN, filepathStr.c_str()));
-			tokensInFile.push_back(CppTokens::CreateToken(-1, -1, TokenType::PREPROCESSING_FILE_END, filepathStr.c_str()));
+			DynamicArray<Token> tokensInFile = ScriptScanner::ScanTokens(filepathStr.c_str());
+			NDynamicArray::Insert(tokensInFile, CppTokens::CreateToken(-1, -1, TokenType::PREPROCESSING_FILE_BEGIN, filepathStr.c_str()), 0);
+			NDynamicArray::Add(tokensInFile, CppTokens::CreateToken(-1, -1, TokenType::PREPROCESSING_FILE_END, filepathStr.c_str()));
 			ParserData preprocessedData = {
 				tokensInFile,
 				0
@@ -8679,26 +8684,27 @@ namespace CppParser
 			return false;
 		}
 
-		static void MergeTokensAtCurrentPosition(ParserData& data, const std::vector<Token>& tokens)
+		static void MergeTokensAtCurrentPosition(ParserData& data, const DynamicArray<Token>& tokens)
 		{
-			if (tokens.size() > 0)
+			if (tokens.m_NumElements > 0)
 			{
-				auto currentPosition = data.Tokens.begin() + data.CurrentToken;
-				data.Tokens.insert(currentPosition, tokens.begin(), tokens.end());
+				//auto currentPosition = data.Tokens.begin() + data.CurrentToken;
+				NDynamicArray::Insert<Token>(data.Tokens, tokens.begin(), tokens.end(), data.CurrentToken);;
 			}
 		}
 
-		static void PasteReplacementListHere(ParserData& data, const std::vector<Token>& replacement, bool isFunctionMacro)
+		static void PasteReplacementListHere(ParserData& data, const DynamicArray<Token>& replacement, bool isFunctionMacro)
 		{
-			if (replacement.size() > 0)
+			if (replacement.m_NumElements > 0)
 			{
 				auto currentPosition = data.Tokens.begin() + data.CurrentToken;
-				data.Tokens.insert(currentPosition, replacement.begin(), replacement.end());
+				NDynamicArray::Insert<Token>(data.Tokens, replacement.begin(), replacement.end(), data.CurrentToken);
+				//data.Tokens.insert(currentPosition, replacement.begin(), replacement.end());
 				int macroTokenLength = 1;
 				if (isFunctionMacro)
 				{
-					int tmpCursor = data.CurrentToken + replacement.size();
-					int tokensSize = data.Tokens.size();
+					int tmpCursor = data.CurrentToken + replacement.m_NumElements;
+					int tokensSize = data.Tokens.m_NumElements;
 					int grouping = 0;
 					Logger::Assert(tmpCursor + 1 < tokensSize && data.Tokens[tmpCursor + 1].m_Type == TokenType::LEFT_PAREN, "Invalid function macro. Must begin with a '('");
 					while (tmpCursor < tokensSize)
@@ -8720,6 +8726,7 @@ namespace CppParser
 						tmpCursor++;
 					}
 				}
+				//NDynamicArray::Remove()
 				data.Tokens.erase(data.Tokens.begin() + data.CurrentToken + replacement.size(), data.Tokens.begin() + data.CurrentToken + replacement.size() + macroTokenLength);
 			}
 		}
@@ -9141,7 +9148,7 @@ namespace CppParser
 					Token identifier = ConsumeCurrent(data, TokenType::IDENTIFIER);
 					if (ParserString::Compare(identifier.m_Lexeme, "include"))
 					{
-						PreprocessingAstNode* ppTokens = ParsePPTokens(data);
+						PreprocessingAstNode* ppTokens = ParsePPTokens(data, true);
 						if (ppTokens->success)
 						{
 							Consume(data, TokenType::NEWLINE);
@@ -9193,6 +9200,7 @@ namespace CppParser
 								}
 
 								Consume(data, TokenType::RIGHT_PAREN);
+								// TODO: Something is going wrong here, because of parentheses??
 								PreprocessingAstNode* replacementList = ParseReplacementList(data);
 								if (replacementList->success)
 								{
@@ -9317,10 +9325,10 @@ namespace CppParser
 			return GenerateReplacementListNode(ppTokens);
 		}
 
-		static PreprocessingAstNode* ParsePPTokens(ParserData& data)
+		static PreprocessingAstNode* ParsePPTokens(ParserData& data, bool isHeader)
 		{
 			int backtrackPosition = data.CurrentToken;
-			PreprocessingAstNode* result = ParsePreprocessingToken(data);
+			PreprocessingAstNode* result = ParsePreprocessingToken(data, isHeader);
 			if (!result->success)
 			{
 				FreePreprocessingNode(result);
@@ -9328,14 +9336,19 @@ namespace CppParser
 				return GenerateNoSuccessPreprocessingAstNode();
 			}
 
-			while (true)
+			while (!AtEnd(data))
 			{
-				PreprocessingAstNode* nextPPToken = ParsePPTokens(data);
+				PreprocessingAstNode* nextPPToken = ParsePPTokens(data, isHeader);
 				result = GeneratePPTokensNode(result, nextPPToken);
 				if (!nextPPToken->success)
 				{
 					break;
 				}
+			}
+
+			if (AtEnd(data))
+			{
+				result = GeneratePPTokensNode(result, GenerateNoSuccessPreprocessingAstNode());
 			}
 
 			return result;
@@ -9352,7 +9365,7 @@ namespace CppParser
 		}
 
 		// Preprocessor Stuff
-		static PreprocessingAstNode* ParsePreprocessingToken(ParserData& data)
+		static PreprocessingAstNode* ParsePreprocessingToken(ParserData& data, bool isHeader)
 		{
 			if (Peek(data) == TokenType::NEWLINE || Peek(data) == TokenType::END_OF_FILE)
 			{
@@ -9360,13 +9373,16 @@ namespace CppParser
 			}
 
 			int backtrackPosition = data.CurrentToken;
-			PreprocessingAstNode* headerName = ParseHeaderName(data);
-			if (headerName->success)
+			if (isHeader)
 			{
-				return headerName;
+				PreprocessingAstNode* headerName = ParseHeaderName(data);
+				if (headerName->success)
+				{
+					return headerName;
+				}
+				FreePreprocessingNode(headerName);
+				BacktrackTo(data, backtrackPosition);
 			}
-			FreePreprocessingNode(headerName);
-			BacktrackTo(data, backtrackPosition);
 
 			if (Peek(data) == TokenType::IDENTIFIER)
 			{
@@ -9416,7 +9432,7 @@ namespace CppParser
 			{
 				Token identifier = ConsumeCurrent(data, Peek(data));
 				identifier.m_Lexeme = ParserString::CreateString(identifier.m_Lexeme);
-				while (!Match(data, TokenType::RIGHT_ANGLE_BRACKET))
+				while (!AtEnd(data) && !Match(data, TokenType::RIGHT_ANGLE_BRACKET))
 				{
 					if (Match(data, TokenType::NEWLINE))
 					{

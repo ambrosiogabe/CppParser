@@ -52,11 +52,11 @@ namespace CppParser
 			return nullptr;
 		}
 
-		void FreeString(char* str)
+		void FreeString(const char* str)
 		{
 			if (str)
 			{
-				FreeMem(str);
+				FreeMem((void*)str);
 			}
 		}
 	}
