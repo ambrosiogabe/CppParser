@@ -1,5 +1,5 @@
-#pragma once
-#include "cppParser/Types.h"
+#ifndef GABE_CPP_PARSER_TOKENS
+#define GABE_CPP_PARSER_TOKENS
 
 #undef CONST
 #undef DELETE
@@ -68,3 +68,5 @@ namespace CppParser
 		Token CreateToken(int line, int column, TokenType type, const char* str);
 	}
 }
+
+#endif

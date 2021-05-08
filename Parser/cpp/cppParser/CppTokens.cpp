@@ -1,5 +1,4 @@
 #pragma once
-#include "cppParser/Types.h"
 #include "cppParser/CppTokens.h"
 #include "cppParser/ParserString.h"
 

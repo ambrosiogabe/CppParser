@@ -1,4 +1,7 @@
-#include "cppParser/Types.h"
+#define GABE_CPP_UTILS_IMPL
+#include "CppUtils/CppUtils.h"
+#undef GABE_CPP_UTILS_IMPL
+
 #include "cppParser/ScriptScanner.h"
 #include "cppParser/ScriptParser.h"
 
@@ -18,8 +21,9 @@ namespace CppParser
 int main()
 {
 	using namespace CppParser;
+	using namespace CppUtils;
 
-	std::vector<Token> tokens = ScriptScanner::ScanTokens("testParser.cpp");
+	List<Token> tokens = ScriptScanner::ScanTokens("testParser.cpp");
 	ScriptScanner::DebugPrint(tokens);
 	std::vector<std::filesystem::path> includeDirs = {};
 	AstNode* parseTree = Parser::Parse("testParser.cpp", includeDirs, tokens);

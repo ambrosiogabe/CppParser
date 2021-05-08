@@ -1,20 +1,22 @@
 #include "cppParser/Symbols.h"
 #include "cppParser/ParserString.h"
-#include "cppParser/Logger.h"
 #include "cppParser/ScriptParser.h"
+#include "CppUtils/CppUtils.h"
 
 namespace CppParser
 {
 	namespace Symbols
 	{
+		using namespace CppUtils;
+
 		// Internal variables
 		static unsigned long HashToken(const Token& token);
 		static bool IsSameHashData(const Token& t1, unsigned long hash1, int lineDefined, const DefineSymbol& hash2);
 		static void MacroAddToReplacementList(PreprocessingAstNode* node, void* userData);
-		static std::vector<Token> ExpandSimpleMacro(const PPSymbolTable& symbolTable, PreprocessingAstNode* preprocessingNode, int newLine);
+		static List<Token> ExpandSimpleMacro(const PPSymbolTable& symbolTable, PreprocessingAstNode* preprocessingNode, int newLine);
 		static void FunctionMacroAddToIdentifierList(PreprocessingAstNode* node, void* userData);
-		static std::vector<Token> ExpandFunctionMacro(const PPSymbolTable& symbolTable,
-			PreprocessingAstNode* preprocessingNode, int newLine, const std::vector<Token>& tokens, int currentToken);
+		static List<Token> ExpandFunctionMacro(const PPSymbolTable& symbolTable,
+			PreprocessingAstNode* preprocessingNode, int newLine, const List<Token>& tokens, int currentToken);
 
 		// ===========================================================================================
 		// Public functions
@@ -47,12 +49,12 @@ namespace CppParser
 				}
 			}
 
-			symbolTable.DefineSymbols.push_back(DefineSymbol{ symbolTree, macroIdentifierToken, tokenHash, lineDefined, INT_MAX });
+			symbolTable.DefineSymbols.push(DefineSymbol{ symbolTree, macroIdentifierToken, tokenHash, lineDefined, INT_MAX });
 		}
 
-		std::vector<Token> ExpandMacro(const PPSymbolTable& symbolTable, int currentToken, const std::vector<Token>& tokens)
+		List<Token> ExpandMacro(const PPSymbolTable& symbolTable, int currentToken, const List<Token>& tokens)
 		{
-			const Token& token = tokens.at(currentToken);
+			const Token& token = tokens.get(currentToken);
 			unsigned long tokenHash = HashToken(token);
 			for (const DefineSymbol& hash : symbolTable.DefineSymbols)
 			{
@@ -158,37 +160,37 @@ namespace CppParser
 		{
 			Logger::Assert(userData != nullptr, "Invalid replacement list user data while replacing macro.");
 
-			std::vector<Token>& replacementListResult = *(std::vector<Token>*)userData;
+			List<Token>& replacementListResult = *(List<Token>*)userData;
 			if (node->type == PreprocessingAstNodeType::PPTokens)
 			{
 				PreprocessingAstNode* ppToken = node->ppTokens.preprocessingToken;
 				if (ppToken->type == PreprocessingAstNodeType::Identifier)
 				{
-					replacementListResult.push_back(ppToken->identifier.identifier);
+					replacementListResult.push(ppToken->identifier.identifier);
 				}
 				else if (ppToken->type == PreprocessingAstNodeType::PreprocessingOpOrPunc)
 				{
-					replacementListResult.push_back(ppToken->preprocessingOpOrPunc.opOrPunc);
+					replacementListResult.push(ppToken->preprocessingOpOrPunc.opOrPunc);
 				}
 				else if (ppToken->type == PreprocessingAstNodeType::HeaderName)
 				{
-					replacementListResult.push_back(ppToken->headerName.identifier);
+					replacementListResult.push(ppToken->headerName.identifier);
 				}
 				else if (ppToken->type == PreprocessingAstNodeType::HeaderNameString)
 				{
-					replacementListResult.push_back(ppToken->headerNameString.stringLiteral);
+					replacementListResult.push(ppToken->headerNameString.stringLiteral);
 				}
 				else if (ppToken->type == PreprocessingAstNodeType::NumberLiteral)
 				{
-					replacementListResult.push_back(ppToken->numberLiteral.numberLiteral);
+					replacementListResult.push(ppToken->numberLiteral.numberLiteral);
 				}
 				else if (ppToken->type == PreprocessingAstNodeType::CharacterLiteral)
 				{
-					replacementListResult.push_back(ppToken->characterLiteral.characterLiteral);
+					replacementListResult.push(ppToken->characterLiteral.characterLiteral);
 				}
 				else if (ppToken->type == PreprocessingAstNodeType::StringLiteral)
 				{
-					replacementListResult.push_back(ppToken->stringLiteral.stringLiteral);
+					replacementListResult.push(ppToken->stringLiteral.stringLiteral);
 				}
 				else if (ppToken->type == PreprocessingAstNodeType::PPTokens || ppToken->type == PreprocessingAstNodeType::None)
 				{
@@ -201,9 +203,9 @@ namespace CppParser
 			}
 		}
 
-		static std::vector<Token> ExpandSimpleMacro(const PPSymbolTable& symbolTable, PreprocessingAstNode* preprocessingNode, int newLine)
+		static List<Token> ExpandSimpleMacro(const PPSymbolTable& symbolTable, PreprocessingAstNode* preprocessingNode, int newLine)
 		{
-			std::vector<Token> replacementListResult;
+			List<Token> replacementListResult;
 			Parser::WalkPreprocessingTree(preprocessingNode->macroDefine.replacementList, (void*)&replacementListResult, MacroAddToReplacementList);
 			for (Token& token : replacementListResult)
 			{
@@ -216,10 +218,10 @@ namespace CppParser
 		{
 			Logger::Assert(userData != nullptr, "Invalid replacement list user data while replacing macro.");
 
-			std::vector<Token>& replacementListResult = *(std::vector<Token>*)userData;
+			List<Token>& replacementListResult = *(List<Token>*)userData;
 			if (node->type == PreprocessingAstNodeType::Identifier)
 			{
-				replacementListResult.push_back(node->identifier.identifier);
+				replacementListResult.push(node->identifier.identifier);
 			}
 			else if (node->type == PreprocessingAstNodeType::IdentifierList)
 			{
@@ -233,15 +235,15 @@ namespace CppParser
 
 		static struct FunctionMacroDTO
 		{
-			std::vector<Token>& functionIdentifiers;
-			std::vector<Token>& replacementListResult;
+			List<Token>& functionIdentifiers;
+			List<Token>& replacementListResult;
 		};
 
-		static std::vector<Token> ExpandFunctionMacro(const PPSymbolTable& symbolTable,
-			PreprocessingAstNode* preprocessingNode, int newLine, const std::vector<Token>& tokens, int currentToken)
+		static List<Token> ExpandFunctionMacro(const PPSymbolTable& symbolTable,
+			PreprocessingAstNode* preprocessingNode, int newLine, const List<Token>& tokens, int currentToken)
 		{
-			std::vector<Token> functionIdentifiers;
-			std::vector<Token> replacementListResult;
+			List<Token> functionIdentifiers;
+			List<Token> replacementListResult;
 			// Get function identifiers
 			Parser::WalkPreprocessingTree(preprocessingNode->macroDefineFunction.identifierList, (void*)&functionIdentifiers, FunctionMacroAddToIdentifierList);
 
@@ -256,7 +258,7 @@ namespace CppParser
 
 			for (int i = 0; i < replacementListResult.size(); i++)
 			{
-				Token& token = replacementListResult.at(i);
+				Token& token = replacementListResult[i];
 				int parameterIndex = 0;
 				currentToken = replacementListTokenStart;
 				for (Token& identifier : functionIdentifiers)
@@ -264,7 +266,7 @@ namespace CppParser
 					// If we have the same lexeme here
 					if (ParserString::Compare(identifier.m_Lexeme, token.m_Lexeme))
 					{
-						std::vector<Token> replacementForIdentifier;
+						List<Token> replacementForIdentifier;
 						int argumentIndex = 0;
 						bool atParameter = parameterIndex == argumentIndex;
 						// Replace the lexeme with the actual tokens that would have been supplied
@@ -299,25 +301,14 @@ namespace CppParser
 
 							if (atParameter)
 							{
-								replacementForIdentifier.push_back(replacement);
+								replacementForIdentifier.push(replacement);
 							}
 							currentToken++;
 							atParameter = parameterIndex == argumentIndex;
 						}
 
-						replacementListResult.erase(replacementListResult.begin() + i);
-						if (i == replacementListResult.size() - 1)
-						{
-							int replacementForIdentifierSize = replacementForIdentifier.size();
-							for (auto iter = replacementForIdentifier.begin(); iter != replacementForIdentifier.end(); iter++)
-							{
-								replacementListResult.push_back(*iter);
-							}
-						}
-						else
-						{
-							replacementListResult.insert(replacementListResult.begin() + i, replacementForIdentifier.begin(), replacementForIdentifier.end());
-						}
+						replacementListResult.removeByIndex(i);
+						replacementListResult.insert(replacementForIdentifier.begin(), replacementForIdentifier.end(), i);
 						break;
 					}
 					parameterIndex++;

@@ -1,11 +1,13 @@
-#pragma once
+#ifndef GABE_CPP_PARSER_SYMBOLS
+#define GABE_CPP_PARSER_SYMBOLS
 #include "cppParser/CppTokens.h"
 #include "cppParser/Ast.h"
-
-#include <vector>
+#include "CppUtils/CppUtils.h"
 
 namespace CppParser
 {
+	using namespace CppUtils;
+
 	struct DefineSymbol
 	{
 		PreprocessingAstNode* symbolTree;
@@ -17,17 +19,19 @@ namespace CppParser
 
 	struct PPSymbolTable
 	{
-		std::vector<DefineSymbol> DefineSymbols;
+		List<DefineSymbol> DefineSymbols;
 	};
 
 	namespace Symbols
 	{
 		void AddUndefine(PPSymbolTable& symbolTable, const Token& token, int lineUndefined);
 		void AddDefineSymbol(PPSymbolTable& symbolTable, const Token& macroIdentifierToken, int lineDefined, PreprocessingAstNode* symbolTree);
-		std::vector<Token> ExpandMacro(const PPSymbolTable& symbolTable, int currentToken, const std::vector<Token>& tokens);
+		List<Token> ExpandMacro(const PPSymbolTable& symbolTable, int currentToken, const List<Token>& tokens);
 
 		bool IsDefined(const PPSymbolTable& symbolTable, const Token& token);
 		bool IsFunctionMacroDefine(const PPSymbolTable& symbolTable, const Token& token);
 		bool IsSymbol(const PPSymbolTable& symbolTable, const Token& token);
 	}
 }
+
+#endif

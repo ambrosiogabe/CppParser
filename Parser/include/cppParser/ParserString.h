@@ -1,4 +1,5 @@
-#pragma once
+#ifndef GABE_PARSER_STRING
+#define GABE_PARSER_STRING
 
 // TODO: Make strings always const char*, and everytime you make a new one just
 // TODO: make a copy of it...
@@ -13,3 +14,5 @@ namespace CppParser
 		char* Join(const char* str1, const char* str2);
 	}
 }
+
+#endif

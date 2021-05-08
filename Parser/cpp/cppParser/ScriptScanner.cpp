@@ -1,7 +1,7 @@
 #include "cppParser/ScriptScanner.h"
 #include "cppParser/CppTokens.h"
-#include "cppParser/Logger.h"
 #include "cppParser/FileIO.h"
+#include "CppUtils/CppUtils.h"
 
 #include <unordered_map>
 
@@ -9,6 +9,8 @@ namespace CppParser
 {
 	namespace ScriptScanner
 	{
+		using namespace CppUtils;
+
 		// Internal Variables
 		static int m_Cursor;
 		static std::string m_FileContents;
@@ -346,9 +348,9 @@ namespace CppParser
 			return iter->second;
 		}
 
-		std::vector<Token> ScanTokens(const char* filepath, bool includeWhitespace)
+		List<Token> ScanTokens(const char* filepath, bool includeWhitespace)
 		{
-			auto tokens = std::vector<Token>();
+			List<Token> tokens;
 			Logger::Log("Scanning file '%s'", filepath);
 			char* rawFileContents = FileIO::DefaultReadFile(filepath);
 			m_FileContents = std::string(rawFileContents);
@@ -371,16 +373,16 @@ namespace CppParser
 					}
 				}
 				if (token.m_Type != TokenType::ERROR_TYPE)
-					tokens.push_back(token);
+					tokens.push(token);
 			}
 
-			tokens.emplace_back(Token{ -1, m_Column, TokenType::END_OF_FILE, ParserString::CreateString("EOF") });
+			tokens.push(Token{ -1, m_Column, TokenType::END_OF_FILE, ParserString::CreateString("EOF") });
 
 			FileIO::DefaultFreeFile(rawFileContents);
 			return tokens;
 		}
 
-		void DebugPrint(const std::vector<Token>& tokens, bool printLineAndCol, bool printWhitespace)
+		void DebugPrint(const List<Token>& tokens, bool printLineAndCol, bool printWhitespace)
 		{
 			Logger::Info("Tokens for file: '%s'", m_Filepath);
 

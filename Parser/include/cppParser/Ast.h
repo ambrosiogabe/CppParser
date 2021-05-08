@@ -1,4 +1,5 @@
-#pragma once
+#ifndef GABE_CPP_PARSER_AST
+#define GABE_CPP_PARSER_AST
 
 namespace CppParser
 {
@@ -2064,3 +2065,5 @@ namespace CppParser
 		};
 	};
 }
+
+#endif

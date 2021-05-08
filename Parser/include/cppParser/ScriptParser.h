@@ -1,7 +1,8 @@
-#pragma once
+#ifndef GABE_PARSER_SCRIPT_PARSER
+#define GABE_PARSER_SCRIPT_PARSER
 #include "cppParser/ScriptScanner.h"
 #include "cppParser/Ast.h"
-#include "cppParser/Types.h"
+#include "CppUtils/CppUtils.h"
 
 #include <filesystem>
 
@@ -14,7 +15,9 @@ namespace CppParser
 
 	namespace Parser
 	{
-		AstNode* Parse(const char* fileBeingParsed, std::vector<std::filesystem::path>& includeDirs, std::vector<Token>& tokens);
+		using namespace CppUtils;
+
+		AstNode* Parse(const char* fileBeingParsed, std::vector<std::filesystem::path>& includeDirs, List<Token>& tokens);
 
 		void FreeTree(AstNode* tree);
 
@@ -30,3 +33,5 @@ namespace CppParser
 			PreprocessingAstNodeType notificationType = PreprocessingAstNodeType::All, bool postTraversalCallback = false);
 	}
 }
+
+#endif

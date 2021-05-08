@@ -1,5 +1,4 @@
-#include "cppParser/Types.h"
-#include "cppParser/Logger.h"
+#include "CppUtils/CppUtils.h"
 
 #include <cstring>
 
@@ -7,6 +6,8 @@ namespace CppParser
 {
 	namespace ParserString
 	{
+		using namespace CppUtils;
+
 		char* CreateString(const char* strToCopy)
 		{
 			size_t size = strlen(strToCopy);

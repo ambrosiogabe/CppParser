@@ -1,6 +1,5 @@
 #include "cppParser/FileIO.h"
-#include "cppParser/Types.h"
-#include "cppParser/Logger.h"
+#include "CppUtils/CppUtils.h"
 
 #include <stdio.h>
 
@@ -8,6 +7,8 @@ namespace CppParser
 {
 	namespace FileIO
 	{
+		using namespace CppUtils;
+
 		char* DefaultReadFile(const char* filepath)
 		{
 			FILE* filePointer;

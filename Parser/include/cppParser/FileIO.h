@@ -1,4 +1,5 @@
-#pragma once
+#ifndef GABE_PARSER_FILE_IO
+#define GABE_PARSER_FILE_IO
 
 namespace CppParser
 {
@@ -8,3 +9,5 @@ namespace CppParser
 		void DefaultFreeFile(char* fileContents);
 	}
 }
+
+#endif
