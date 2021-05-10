@@ -8,18 +8,26 @@
 
 namespace CppParser
 {
+	using namespace CppUtils;
 	typedef void(*AstWalkTreeCallbackFn)(AstNode* node);
 	typedef void(*AstWalkPpTreeCallbackFn)(PreprocessingAstNode* node);
 	typedef void(*AstWalkTreeUserDataCallbackFn)(AstNode* node, void* userData);
 	typedef void(*AstWalkPpTreeUserDataCallbackFn)(PreprocessingAstNode* node, void* userData);
 
+	// This is not a POD because of the list
+	struct ParserData
+	{
+		List<Token> Tokens;
+		int CurrentToken;
+		AstNode* Tree;
+	};
+
 	namespace Parser
 	{
 		using namespace CppUtils;
 
-		AstNode* Parse(const char* fileBeingParsed, std::vector<std::filesystem::path>& includeDirs, List<Token>& tokens);
-
-		void FreeTree(AstNode* tree);
+		ParserData Parse(const char* file, std::vector<std::filesystem::path>& includeDirs);
+		void FreeParserData(ParserData& parserData);
 
 		// Walk tree functions
 		void WalkTree(AstNode* tree, AstWalkTreeCallbackFn callbackFn, AstNodeType notificationType = AstNodeType::All, bool postTraversalCallback = false);

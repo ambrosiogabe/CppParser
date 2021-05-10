@@ -4,6 +4,7 @@
 #include "cppParser/ScriptScanner.h"
 #include "cppParser/Symbols.h"
 #include "CppUtils/CppUtils.h"
+#include "cppParser/ParserString.h"
 
 #include <algorithm>
 #include <cstring>
@@ -19,25 +20,29 @@ namespace CppParser
 		static PPSymbolTable PreprocessingSymbolTable;
 		static std::vector<std::filesystem::path> FilesSeen = {};
 
-		// This is not a POD because of the list
-		struct ParserData
-		{
-			List<Token> Tokens;
-			int CurrentToken;
-		};
-
+		static void FreeTree(AstNode* tree);
 		static AstNode* ParseTranslationUnit(const char* fileBeingParsed, std::vector<std::filesystem::path>& includeDirs, ParserData& data);
 
-		AstNode* Parse(const char* fileBeingParsed, std::vector<std::filesystem::path>& includeDirs, List<Token>& tokens)
+		ParserData Parse(const char* fileBeingParsed, std::vector<std::filesystem::path>& includeDirs)
 		{
 			FilesSeen.clear();
+			List<Token> tokens = ScriptScanner::ScanTokens("testParser.cpp");
+			ScriptScanner::DebugPrint(tokens);
 			ParserData data = {
 				tokens,
-				0
+				0,
+				nullptr
 			};
 
 			AstNode* result = ParseTranslationUnit(fileBeingParsed, includeDirs, data);
-			return result;
+			data.Tree = result;
+			return data;
+		}
+
+		void FreeParserData(ParserData& parserData)
+		{
+			FreeTree(parserData.Tree);
+			ScriptScanner::FreeTokens(parserData.Tokens);
 		}
 
 		// =============================================================================================
@@ -68,11 +73,11 @@ namespace CppParser
 		}
 
 		// =============================================================================================
-		// Free Tree function (public)
+		// Free Tree function (internal)
 		//
 		// This will free all memory allocated by the AST tree passed in
 		// =============================================================================================
-		void FreeTree(AstNode* tree)
+		static void FreeTree(AstNode* tree)
 		{
 			FreeNode(tree);
 		}
@@ -1205,21 +1210,30 @@ namespace CppParser
 		//
 		// These are a collection of functions that are used to construct any of the AST node types
 		// ===============================================================================================
-		static AstNode* GenerateAstNode(AstNodeType type)
-		{
-			AstNode* node = (AstNode*)AllocMem(sizeof(AstNode));
-			node->success = true;
-			node->type = type;
-			return node;
-		}
+#define GenerateAstNode(pType) \
+(AstNode*) AllocMem(sizeof(AstNode)); \
+result->success = true; \
+result->type = pType; 
 
-		static PreprocessingAstNode* GeneratePreprocessingAstNode(PreprocessingAstNodeType type)
-		{
-			PreprocessingAstNode* node = (PreprocessingAstNode*)AllocMem(sizeof(PreprocessingAstNode));
-			node->success = true;
-			node->type = type;
-			return node;
-		}
+		//static AstNode* GenerateAstNode(AstNodeType type)
+		//{
+		//	AstNode* node = (AstNode*)AllocMem(sizeof(AstNode));
+		//	node->success = true;
+		//	node->type = type;
+		//	return node;
+		//}
+#define GeneratePreprocessingAstNode(pType) \
+(PreprocessingAstNode*) AllocMem(sizeof(PreprocessingAstNode)); \
+result->success = true; \
+result->type = pType; 
+
+		//static PreprocessingAstNode* GeneratePreprocessingAstNode(PreprocessingAstNodeType type)
+		//{
+		//	PreprocessingAstNode* node = (PreprocessingAstNode*)AllocMem(sizeof(PreprocessingAstNode));
+		//	node->success = true;
+		//	node->type = type;
+		//	return node;
+		//}
 
 		static AstNode* GenerateEmptyStatementNode()
 		{
@@ -2951,19 +2965,25 @@ namespace CppParser
 			return result;
 		}
 
-		static AstNode* GenerateNoSuccessAstNode()
-		{
-			AstNode* node = GenerateAstNode(AstNodeType::None);
-			node->success = false;
-			return node;
-		}
+#define GenerateNoSuccessAstNode() \
+ []() -> AstNode* {AstNode* result = GenerateAstNode(AstNodeType::None); result->success = false; return result; }()
 
-		static PreprocessingAstNode* GenerateNoSuccessPreprocessingAstNode()
-		{
-			PreprocessingAstNode* node = GeneratePreprocessingAstNode(PreprocessingAstNodeType::None);
-			node->success = false;
-			return node;
-		}
+
+		//static AstNode* GenerateNoSuccessAstNode()
+		//{
+		//	AstNode* result = GenerateAstNode(AstNodeType::None);
+		//	result->success = false;
+		//	return result;
+		//}
+
+#define GenerateNoSuccessPreprocessingAstNode() \
+ []() -> PreprocessingAstNode* {PreprocessingAstNode* result = GeneratePreprocessingAstNode(PreprocessingAstNodeType::None); result->success = false; return result; }()
+		//static PreprocessingAstNode* GenerateNoSuccessPreprocessingAstNode()
+		//{
+		//	PreprocessingAstNode* result = GeneratePreprocessingAstNode(PreprocessingAstNodeType::None);
+		//	result->success = false;
+		//	return result;
+		//}
 
 		static PreprocessingAstNode* GeneratePreprocessingFileNode(PreprocessingAstNode* group)
 		{
@@ -3493,8 +3513,8 @@ namespace CppParser
 		// Translation Unit
 		static AstNode* ParseTranslationUnit(const char* fileBeingParsed, std::vector<std::filesystem::path>& includeDirs, ParserData& data)
 		{
-			data.Tokens.insert(CppTokens::CreateToken(-1, -1, TokenType::PREPROCESSING_FILE_BEGIN, fileBeingParsed), 0);
-			data.Tokens.push(CppTokens::CreateToken(-1, -1, TokenType::PREPROCESSING_FILE_END, fileBeingParsed));
+			data.Tokens.insert(Token{ -1, -1, TokenType::PREPROCESSING_FILE_BEGIN, ParserString::CreateString(fileBeingParsed) }, 0);
+			data.Tokens.push(Token{ -1, -1, TokenType::PREPROCESSING_FILE_END, ParserString::CreateString(fileBeingParsed) });
 			Preprocess(fileBeingParsed, includeDirs, data);
 			data.CurrentToken = 0;
 			return ParseDeclarationSequence(data);
@@ -3801,6 +3821,8 @@ namespace CppParser
 			if (!compoundStatement->success)
 			{
 				FreeNode(lambdaIntroducer);
+				FreeNode(lambdaDeclarator);
+				FreeNode(compoundStatement);
 				BacktrackTo(data, backtrackPosition);
 				return GenerateNoSuccessAstNode();
 			}
@@ -4112,6 +4134,7 @@ namespace CppParser
 					if (!idExpression->success)
 					{
 						FreeNode(postfixExpression);
+						FreeNode(idExpression);
 						return GenerateNoSuccessAstNode();
 					}
 					return GeneratePostfixMemberIdExpressionNode(postfixExpression, idExpression, hasTemplateKeyword, memberOp);
@@ -4780,7 +4803,7 @@ namespace CppParser
 			while (Match(data, TokenType::COMMA))
 			{
 				AstNode* nextExpression = expression;
-				AstNode* expression = GenerateAstNode(AstNodeType::Expression);
+				AstNode* result = GenerateAstNode(AstNodeType::Expression);
 				expression->expressionNode.expression = ParseExpression(data);
 				expression->expressionNode.nextExpression = nextExpression;
 			}
@@ -8581,8 +8604,8 @@ namespace CppParser
 			Logger::Info("Getting tokens from included file in '%s'", filepathStr.c_str());
 
 			List<Token> tokensInFile = ScriptScanner::ScanTokens(filepathStr.c_str());
-			tokensInFile.insert(CppTokens::CreateToken(-1, -1, TokenType::PREPROCESSING_FILE_BEGIN, filepathStr.c_str()), 0);
-			tokensInFile.push(CppTokens::CreateToken(-1, -1, TokenType::PREPROCESSING_FILE_END, filepathStr.c_str()));
+			tokensInFile.insert(Token{ -1, -1, TokenType::PREPROCESSING_FILE_BEGIN, ParserString::CreateString(filepathStr.c_str()) }, 0);
+			tokensInFile.push(Token{ -1, -1, TokenType::PREPROCESSING_FILE_END, ParserString::CreateString(filepathStr.c_str()) });
 			ParserData preprocessedData = {
 				tokensInFile,
 				0
@@ -8704,7 +8727,7 @@ namespace CppParser
 				auto currentPosition = data.Tokens.begin() + data.CurrentToken;
 				data.Tokens.insert(replacement.begin(), replacement.end(), data.CurrentToken);
 				//data.Tokens.insert(currentPosition, replacement.begin(), replacement.end());
-				int macroTokenLength = 1;
+				int macroTokenLength = 0;
 				if (isFunctionMacro)
 				{
 					int tmpCursor = data.CurrentToken + replacement.size();
@@ -8712,9 +8735,15 @@ namespace CppParser
 					Logger::Assert(tmpCursor + 1 < data.Tokens.size() && data.Tokens[tmpCursor + 1].m_Type == TokenType::LEFT_PAREN, "Invalid function macro. Must begin with a '('");
 					while (tmpCursor < data.Tokens.size())
 					{
-						ParserString::FreeString(data.Tokens[tmpCursor].m_Lexeme);
+						// Only free the strings for the tokens that aren't part of the stuff we just pasted.
+						// So in a macro that's expanded from something like ( (a + b), b + c ), we would want to
+						// get rid of the surrounding parenthises, and all commas at the first level of grouping
 						if (data.Tokens[tmpCursor].m_Type == TokenType::LEFT_PAREN)
 						{
+							if (grouping == 0)
+							{
+								ParserString::FreeString(data.Tokens[tmpCursor].m_Lexeme);
+							}
 							grouping++;
 						}
 						else if (data.Tokens[tmpCursor].m_Type == TokenType::RIGHT_PAREN)
@@ -8722,15 +8751,19 @@ namespace CppParser
 							grouping--;
 							if (grouping <= 0)
 							{
+								ParserString::FreeString(data.Tokens[tmpCursor].m_Lexeme);
 								break;
 							}
+						}
+						else if (data.Tokens[tmpCursor].m_Type == TokenType::COMMA && grouping == 1)
+						{
+							ParserString::FreeString(data.Tokens[tmpCursor].m_Lexeme);
 						}
 						macroTokenLength++;
 						tmpCursor++;
 					}
 				}
-				//data.Tokens.erase(data.Tokens.begin() + data.CurrentToken + replacement.size(), data.Tokens.begin() + data.CurrentToken + replacement.size() + macroTokenLength);
-				data.Tokens.removeRange(data.Tokens.begin() + data.CurrentToken + replacement.size(), data.Tokens.begin() + data.CurrentToken + replacement.size() + macroTokenLength);
+				data.Tokens.removeRange(data.CurrentToken + replacement.size(), data.CurrentToken + replacement.size() + macroTokenLength);
 			}
 		}
 
@@ -8858,6 +8891,7 @@ namespace CppParser
 					{
 						data.CurrentToken++;
 					}
+					FreePreprocessingNode(includeFile);
 				}
 				else
 				{

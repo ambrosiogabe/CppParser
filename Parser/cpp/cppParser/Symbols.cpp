@@ -250,9 +250,8 @@ namespace CppParser
 			// Replace function identifiers here
 			Parser::WalkPreprocessingTree(preprocessingNode, (void*)&replacementListResult, MacroAddToReplacementList);
 
-			int tokensSize = tokens.size();
 			currentToken++;
-			Logger::Assert(currentToken < tokensSize&& tokens[currentToken].m_Type == TokenType::LEFT_PAREN, "Macro function definition must begin with a left parenthesis");
+			Logger::Assert(currentToken < tokens.size() && tokens[currentToken].m_Type == TokenType::LEFT_PAREN, "Macro function definition must begin with a left parenthesis");
 			currentToken++;
 			int replacementListTokenStart = currentToken;
 
@@ -271,7 +270,7 @@ namespace CppParser
 						bool atParameter = parameterIndex == argumentIndex;
 						// Replace the lexeme with the actual tokens that would have been supplied
 						int grouping = 0;
-						while (currentToken < tokensSize)
+						while (currentToken < tokens.size())
 						{
 							const Token& replacement = tokens[currentToken];
 							if (replacement.m_Type == TokenType::LEFT_PAREN)

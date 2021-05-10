@@ -9,7 +9,7 @@ namespace CppParser
 	{
 		using namespace CppUtils;
 
-		char* DefaultReadFile(const char* filepath)
+		const char* DefaultReadFile(const char* filepath)
 		{
 			FILE* filePointer;
 			filePointer = fopen(filepath, "rb");
@@ -47,11 +47,11 @@ namespace CppParser
 			return nullptr;
 		}
 
-		void DefaultFreeFile(char* fileContents)
+		void DefaultFreeFile(const char* fileContents)
 		{
 			if (fileContents)
 			{
-				FreeMem(fileContents);
+				FreeMem((void*)fileContents);
 			}
 		}
 	}

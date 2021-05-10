@@ -1,7 +1,6 @@
 #ifndef GABE_PARSER_SCRIPT_SCANNER
 #define GABE_PARSER_SCRIPT_SCANNER
 #include "cppParser/CppTokens.h"
-#include "cppParser/ParserString.h"
 #include "CppUtils/CppUtils.h"
 
 namespace CppParser
@@ -16,8 +15,6 @@ namespace CppParser
 		const char* TokenName(TokenType type);
 
 		void FreeTokens(List<Token>& tokens);
-
-		inline Token GenerateErrorToken();
 	};
 }
 

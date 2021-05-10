@@ -5,8 +5,8 @@ namespace CppParser
 {
 	namespace FileIO
 	{
-		char* DefaultReadFile(const char* filepath);
-		void DefaultFreeFile(char* fileContents);
+		const char* DefaultReadFile(const char* filepath);
+		void DefaultFreeFile(const char* fileContents);
 	}
 }
 

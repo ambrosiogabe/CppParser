@@ -1,7 +1,7 @@
 #include "cppParser/ScriptScanner.h"
-#include "cppParser/CppTokens.h"
 #include "cppParser/FileIO.h"
 #include "CppUtils/CppUtils.h"
+#include "cppParser/ParserString.h"
 
 #include <unordered_map>
 
@@ -11,81 +11,141 @@ namespace CppParser
 	{
 		using namespace CppUtils;
 
-		// Internal Variables
-		static int m_Cursor;
-		static std::string m_FileContents;
-		static const char* m_Filepath;
-		static int m_FileContentsSize;
-		static int m_Line;
-		static int m_Column;
-		static int m_Start;
+		// Internal structures
+		struct ScannerData
+		{
+			int Line;
+			int Column;
+			int Start;
+			int Cursor;
+			int FileContentsSize;
+			const char* FileContents;
+			const char* Filepath;
+		};
 
 		// Forward Declarations
-		static Token ScanToken();
-		static Token PropertyIdentifier();
-		static Token Number(char firstDigit);
-		static Token NumberDecimal(char firstDigit);
-		static Token NumberBinary();
-		static Token NumberHexadecimal();
-		static Token NumberOctal();
+		static Token ScanToken(ScannerData& data);
+		static Token PropertyIdentifier(ScannerData& data);
+		static Token Number(ScannerData& data, char firstDigit);
+		static Token NumberDecimal(ScannerData& data, char firstDigit);
+		static Token NumberBinary(ScannerData& data);
+		static Token NumberHexadecimal(ScannerData& data);
+		static Token NumberOctal(ScannerData& data);
 
-		static Token Character();
-		static Token String(bool isRawStringLiteral = false);
+		static Token Character(ScannerData& data);
+		static Token String(ScannerData& data, bool isRawStringLiteral = false);
+		static inline void ConsumeTrailingUnsignedLong(ScannerData& data);
 
 		// Inline functions
-		static inline char Advance();
-		static inline char Peek();
-		static inline char PeekNext();
-		static inline char PeekNextNext();
-		static inline bool Match(char expected);
-		static inline void ConsumeTrailingUnsignedLong();
-		static inline char PeekPrevious(int amount) { return m_Cursor > amount && m_FileContentsSize > amount ? m_FileContents[m_Cursor - amount] : '\0'; }
-
-		static inline bool IsDigit(char c, bool acceptApostrophe = false) { return c >= '0' && c <= '9' || (acceptApostrophe && c == '\''); }
-		static inline bool IsHexDigit(char c, bool acceptApostrophe) { return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F') || (acceptApostrophe && c == '\''); }
-		static inline bool IsAlpha(char c) { return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z'); }
-		static inline bool IsAlphaNumeric(char c) { return IsAlpha(c) || IsDigit(c); }
-		static inline bool IsSameChar(char c, char lowerCase, char upperCase) { return c == lowerCase || c == upperCase; }
-		static inline bool AtEnd() { return m_Cursor == m_FileContentsSize; }
-
-		static inline Token GenerateToken(TokenType m_Type, char* lexeme)
+		static inline char Advance(ScannerData& data)
 		{
-			return CppTokens::CreateToken(
-				m_Line,
-				m_Column - (m_Cursor - m_Start),
-				m_Type,
-				ParserString::CreateString(lexeme)
-			);
+			char c = data.FileContents[data.Cursor];
+			data.Cursor++;
+			data.Column++;
+			return c;
 		}
 
-		inline Token GenerateErrorToken()
+		static inline bool AtEnd(const ScannerData& data)
 		{
-			return CppTokens::CreateToken(
-				m_Line,
-				m_Column - (m_Cursor - m_Start),
+			return data.Cursor == data.FileContentsSize;
+		}
+
+		static inline char Peek(const ScannerData& data)
+		{
+			if (AtEnd(data)) return '\0';
+			return data.FileContents[data.Cursor];
+		}
+
+		static inline char PeekNext(const ScannerData& data)
+		{
+			if (AtEnd(data) || data.Cursor == data.FileContentsSize - 1) return '\0';
+			return data.FileContents[data.Cursor + 1];
+		}
+
+		static inline char PeekNextNext(const ScannerData& data)
+		{
+			if (AtEnd(data) || data.Cursor == data.FileContentsSize - 1 || data.Cursor == data.FileContentsSize - 2) return '\0';
+			return data.FileContents[data.Cursor + 2];
+		}
+
+		static bool Match(ScannerData& data, char expected)
+		{
+			if (AtEnd(data)) return false;
+			if (data.FileContents[data.Cursor] != expected) return false;
+
+			data.Cursor++;
+			data.Column++;
+			return true;
+		}
+
+		static inline char PeekPrevious(const ScannerData& data, int amount)
+		{
+			return data.Cursor > amount && data.FileContentsSize > amount ? data.FileContents[data.Cursor - amount] : '\0';
+		}
+
+		static inline bool IsDigit(char c, bool acceptApostrophe = false)
+		{
+			return c >= '0' && c <= '9' || (acceptApostrophe && c == '\'');
+		}
+
+		static inline bool IsHexDigit(char c, bool acceptApostrophe)
+		{
+			return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F') || (acceptApostrophe && c == '\'');
+
+		}
+		static inline bool IsAlpha(char c)
+		{
+			return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z');
+		}
+
+		static inline bool IsAlphaNumeric(char c)
+		{
+			return IsAlpha(c) || IsDigit(c);
+		}
+
+		static inline bool IsSameChar(char c, char lowerCase, char upperCase)
+		{
+			return c == lowerCase || c == upperCase;
+		}
+
+		static inline Token GenerateToken(const ScannerData& data, TokenType m_Type, const char* lexeme)
+		{
+			return Token{
+				data.Line,
+				data.Column - (data.Cursor - data.Start),
+				m_Type,
+				ParserString::CreateString(lexeme)
+			};
+		}
+
+		inline Token GenerateErrorToken(const ScannerData& data)
+		{
+			return Token{
+				data.Line,
+				data.Column - (data.Cursor - data.Start),
 				TokenType::ERROR_TYPE,
 				ParserString::CreateString("")
-			);
+			};
 		}
 
 		inline Token GenerateWhitespaceToken()
 		{
-			return CppTokens::CreateToken(
+			return Token{
 				-1,
 				-1,
 				TokenType::WHITESPACE,
 				ParserString::CreateString("")
-			);
+			};
 		}
 
 		inline Token GenerateCommentToken()
 		{
-			return CppTokens::CreateToken(
+			return Token{
 				-1,
 				-1,
 				TokenType::COMMENT,
 				ParserString::CreateString("")
-			);
+			};
 		}
 
 		class StringHasher
@@ -348,35 +408,49 @@ namespace CppParser
 			return iter->second;
 		}
 
+		void FreeTokens(List<Token>& tokens)
+		{
+			for (Token& token : tokens)
+			{
+				ParserString::FreeString(token.m_Lexeme);
+			}
+		}
+
 		List<Token> ScanTokens(const char* filepath, bool includeWhitespace)
 		{
 			List<Token> tokens;
 			Logger::Log("Scanning file '%s'", filepath);
-			char* rawFileContents = FileIO::DefaultReadFile(filepath);
-			m_FileContents = std::string(rawFileContents);
-			m_Filepath = filepath;
-			m_FileContentsSize = (int)m_FileContents.length();
-			m_Line = 1;
-			m_Column = 0;
-			m_Start = 0;
+			const char* rawFileContents = FileIO::DefaultReadFile(filepath);
 
-			m_Cursor = 0;
-			while (!AtEnd())
+			if (rawFileContents)
 			{
-				m_Start = m_Cursor;
-				Token token = ScanToken();
-				if (!includeWhitespace)
-				{
-					if (token.m_Type == TokenType::WHITESPACE || token.m_Type == TokenType::COMMENT)
-					{
-						continue;
-					}
-				}
-				if (token.m_Type != TokenType::ERROR_TYPE)
-					tokens.push(token);
-			}
+				ScannerData data;
+				data.FileContents = rawFileContents;
+				data.Filepath = filepath;
+				data.FileContentsSize = ParserString::StringLength(data.FileContents);
+				data.Line = 1;
+				data.Column = 0;
+				data.Start = 0;
+				data.Cursor = 0;
 
-			tokens.push(Token{ -1, m_Column, TokenType::END_OF_FILE, ParserString::CreateString("EOF") });
+				while (!AtEnd(data))
+				{
+					data.Start = data.Cursor;
+					Token token = ScanToken(data);
+					if (!includeWhitespace)
+					{
+						if (token.m_Type == TokenType::WHITESPACE || token.m_Type == TokenType::COMMENT)
+						{
+							ParserString::FreeString(token.m_Lexeme);
+							continue;
+						}
+					}
+					if (token.m_Type != TokenType::ERROR_TYPE)
+						tokens.push(token);
+				}
+
+				tokens.push(Token{ -1, data.Column, TokenType::END_OF_FILE, ParserString::CreateString("EOF") });
+			}
 
 			FileIO::DefaultFreeFile(rawFileContents);
 			return tokens;
@@ -384,7 +458,7 @@ namespace CppParser
 
 		void DebugPrint(const List<Token>& tokens, bool printLineAndCol, bool printWhitespace)
 		{
-			Logger::Info("Tokens for file: '%s'", m_Filepath);
+			//Logger::Info("Tokens for file: '%s'", filepath);
 
 			for (auto token = tokens.begin(); token != tokens.end(); token++)
 			{
@@ -418,199 +492,199 @@ namespace CppParser
 			}
 		}
 
-		static Token ScanToken()
+		static Token ScanToken(ScannerData& data)
 		{
-			char c = Advance();
+			char c = Advance(data);
 			switch (c)
 			{
 				// Single character tokens
-			case '(': return GenerateToken(TokenType::LEFT_PAREN, "(");
-			case ')': return GenerateToken(TokenType::RIGHT_PAREN, ")");
-			case '{': return GenerateToken(TokenType::LEFT_CURLY_BRACKET, "{");
-			case '}': return GenerateToken(TokenType::RIGHT_CURLY_BRACKET, "}");
-			case ';': return GenerateToken(TokenType::SEMICOLON, ";");
-			case '[': return GenerateToken(TokenType::LEFT_BRACKET, "[");
-			case ']': return GenerateToken(TokenType::RIGHT_BRACKET, "]");
-			case '?': return GenerateToken(TokenType::QUESTION, "?");
-			case '~': return GenerateToken(TokenType::TILDE, "~");
-			case ',': return GenerateToken(TokenType::COMMA, ",");
-			case '#': return GenerateToken(TokenType::HASHTAG, "#");
-			case '"': return String();
-			case '\'': return Character();
+			case '(': return GenerateToken(data, TokenType::LEFT_PAREN, "(");
+			case ')': return GenerateToken(data, TokenType::RIGHT_PAREN, ")");
+			case '{': return GenerateToken(data, TokenType::LEFT_CURLY_BRACKET, "{");
+			case '}': return GenerateToken(data, TokenType::RIGHT_CURLY_BRACKET, "}");
+			case ';': return GenerateToken(data, TokenType::SEMICOLON, ";");
+			case '[': return GenerateToken(data, TokenType::LEFT_BRACKET, "[");
+			case ']': return GenerateToken(data, TokenType::RIGHT_BRACKET, "]");
+			case '?': return GenerateToken(data, TokenType::QUESTION, "?");
+			case '~': return GenerateToken(data, TokenType::TILDE, "~");
+			case ',': return GenerateToken(data, TokenType::COMMA, ",");
+			case '#': return GenerateToken(data, TokenType::HASHTAG, "#");
+			case '"': return String(data);
+			case '\'': return Character(data);
 			case ':':
 			{
-				return GenerateToken(TokenType::COLON, ":");
+				return GenerateToken(data, TokenType::COLON, ":");
 			}
 			case '<':
 			{
-				if (Match('<'))
+				if (Match(data, '<'))
 				{
-					if (Match('='))
+					if (Match(data, '='))
 					{
-						return GenerateToken(TokenType::LEFT_SHIFT_EQUAL, "<<=");
+						return GenerateToken(data, TokenType::LEFT_SHIFT_EQUAL, "<<=");
 					}
-					return GenerateToken(TokenType::LEFT_SHIFT, "<<");
+					return GenerateToken(data, TokenType::LEFT_SHIFT, "<<");
 				}
-				if (Match('='))
+				if (Match(data, '='))
 				{
-					return GenerateToken(TokenType::LESS_THAN_EQ, "<=");
+					return GenerateToken(data, TokenType::LESS_THAN_EQ, "<=");
 				}
-				return GenerateToken(TokenType::LEFT_ANGLE_BRACKET, "<");
+				return GenerateToken(data, TokenType::LEFT_ANGLE_BRACKET, "<");
 			}
 			case '>':
 			{
-				if (Match('>'))
+				if (Match(data, '>'))
 				{
-					if (Match('='))
+					if (Match(data, '='))
 					{
-						return GenerateToken(TokenType::RIGHT_SHIFT_EQUAL, ">>=");
+						return GenerateToken(data, TokenType::RIGHT_SHIFT_EQUAL, ">>=");
 					}
-					return GenerateToken(TokenType::RIGHT_SHIFT, ">>");
+					return GenerateToken(data, TokenType::RIGHT_SHIFT, ">>");
 				}
-				if (Match('='))
+				if (Match(data, '='))
 				{
-					return GenerateToken(TokenType::GREATER_THAN_EQ, ">=");
+					return GenerateToken(data, TokenType::GREATER_THAN_EQ, ">=");
 				}
-				return GenerateToken(TokenType::RIGHT_ANGLE_BRACKET, ">");
+				return GenerateToken(data, TokenType::RIGHT_ANGLE_BRACKET, ">");
 			}
 			case '*':
 			{
-				if (Match('='))
+				if (Match(data, '='))
 				{
-					return GenerateToken(TokenType::STAR_EQUAL, "*=");
+					return GenerateToken(data, TokenType::STAR_EQUAL, "*=");
 				}
-				return GenerateToken(TokenType::STAR, "*");
+				return GenerateToken(data, TokenType::STAR, "*");
 			}
 			case '!':
 			{
-				if (Match('='))
+				if (Match(data, '='))
 				{
-					return GenerateToken(TokenType::BANG_EQUAL, "!=");
+					return GenerateToken(data, TokenType::BANG_EQUAL, "!=");
 				}
-				return GenerateToken(TokenType::BANG, "!");
+				return GenerateToken(data, TokenType::BANG, "!");
 			}
 			case '^':
 			{
-				if (Match('='))
+				if (Match(data, '='))
 				{
-					return GenerateToken(TokenType::CARET_EQUAL, "^=");
+					return GenerateToken(data, TokenType::CARET_EQUAL, "^=");
 				}
-				return GenerateToken(TokenType::CARET, "^");
+				return GenerateToken(data, TokenType::CARET, "^");
 			}
 			case '%':
 			{
-				if (Match('='))
+				if (Match(data, '='))
 				{
-					return GenerateToken(TokenType::MODULO_EQUAL, "%=");
+					return GenerateToken(data, TokenType::MODULO_EQUAL, "%=");
 				}
-				return GenerateToken(TokenType::MODULO, "%");
+				return GenerateToken(data, TokenType::MODULO, "%");
 			}
 			case '&':
 			{
-				if (Match('&'))
+				if (Match(data, '&'))
 				{
-					return GenerateToken(TokenType::LOGICAL_AND, "&&");
+					return GenerateToken(data, TokenType::LOGICAL_AND, "&&");
 				}
-				if (Match('='))
+				if (Match(data, '='))
 				{
-					return GenerateToken(TokenType::AND_EQUAL, "&=");
+					return GenerateToken(data, TokenType::AND_EQUAL, "&=");
 				}
-				return GenerateToken(TokenType::AND, "&");
+				return GenerateToken(data, TokenType::AND, "&");
 			}
 			case '=':
 			{
-				if (Match('='))
+				if (Match(data, '='))
 				{
-					return GenerateToken(TokenType::EQUAL_EQUAL, "==");
+					return GenerateToken(data, TokenType::EQUAL_EQUAL, "==");
 				}
-				return GenerateToken(TokenType::EQUAL, "=");
+				return GenerateToken(data, TokenType::EQUAL, "=");
 			}
 			case '|':
 			{
-				if (Match('='))
+				if (Match(data, '='))
 				{
-					return GenerateToken(TokenType::PIPE_EQUAL, "|=");
+					return GenerateToken(data, TokenType::PIPE_EQUAL, "|=");
 				}
-				if (Match('|'))
+				if (Match(data, '|'))
 				{
-					return GenerateToken(TokenType::LOGICAL_OR, "||");
+					return GenerateToken(data, TokenType::LOGICAL_OR, "||");
 				}
-				return GenerateToken(TokenType::PIPE, "|");
+				return GenerateToken(data, TokenType::PIPE, "|");
 			}
 			case '.':
 			{
-				if (IsDigit(Peek()))
+				if (IsDigit(Peek(data)))
 				{
-					return Number(c);
+					return Number(data, c);
 				}
-				if (Match('*'))
+				if (Match(data, '*'))
 				{
-					return GenerateToken(TokenType::POINTER_TO_MEMBER, ".*");
+					return GenerateToken(data, TokenType::POINTER_TO_MEMBER, ".*");
 				}
-				return GenerateToken(TokenType::DOT, ".");
+				return GenerateToken(data, TokenType::DOT, ".");
 			}
 			case '+':
 			{
-				if (Match('+'))
+				if (Match(data, '+'))
 				{
-					return GenerateToken(TokenType::PLUS_PLUS, "++");
+					return GenerateToken(data, TokenType::PLUS_PLUS, "++");
 				}
-				if (Match('='))
+				if (Match(data, '='))
 				{
-					return GenerateToken(TokenType::PLUS_EQUAL, "+=");
+					return GenerateToken(data, TokenType::PLUS_EQUAL, "+=");
 				}
-				return GenerateToken(TokenType::PLUS, "+");
+				return GenerateToken(data, TokenType::PLUS, "+");
 			}
 			case '-':
 			{
-				if (Match('-'))
+				if (Match(data, '-'))
 				{
-					return GenerateToken(TokenType::MINUS_MINUS, "--");
+					return GenerateToken(data, TokenType::MINUS_MINUS, "--");
 				}
-				if (Match('='))
+				if (Match(data, '='))
 				{
-					return GenerateToken(TokenType::MINUS_EQUAL, "-=");
+					return GenerateToken(data, TokenType::MINUS_EQUAL, "-=");
 				}
-				if (Match('>'))
+				if (Match(data, '>'))
 				{
-					if (Match('*'))
+					if (Match(data, '*'))
 					{
-						return GenerateToken(TokenType::POINTER_TO_MEMBER, "->*");
+						return GenerateToken(data, TokenType::POINTER_TO_MEMBER, "->*");
 					}
-					return GenerateToken(TokenType::ARROW, "->");
+					return GenerateToken(data, TokenType::ARROW, "->");
 				}
-				return GenerateToken(TokenType::MINUS, "-");
+				return GenerateToken(data, TokenType::MINUS, "-");
 			}
 			case '/':
 			{
-				if (Match('/'))
+				if (Match(data, '/'))
 				{
-					while (Peek() != '\n' && !AtEnd())
-						Advance();
+					while (Peek(data) != '\n' && !AtEnd(data))
+						Advance(data);
 					return GenerateCommentToken();
 				}
-				if (Match('*'))
+				if (Match(data, '*'))
 				{
-					while (!AtEnd() && !(Peek() == '*' && PeekNext() == '/'))
+					while (!AtEnd(data) && !(Peek(data) == '*' && PeekNext(data) == '/'))
 					{
-						c = Advance();
+						c = Advance(data);
 						if (c == '\n')
 						{
-							m_Column = 0;
-							m_Line++;
+							data.Column = 0;
+							data.Line++;
 						}
 					}
 
 					// Consume */
-					if (!AtEnd()) Match('*');
-					if (!AtEnd()) Match('/');
+					if (!AtEnd(data)) Match(data, '*');
+					if (!AtEnd(data)) Match(data, '/');
 					return GenerateCommentToken();
 				}
-				if (Match('='))
+				if (Match(data, '='))
 				{
-					return GenerateToken(TokenType::DIV_EQUAL, "/=");
+					return GenerateToken(data, TokenType::DIV_EQUAL, "/=");
 				}
-				return GenerateToken(TokenType::DIV, "/");
+				return GenerateToken(data, TokenType::DIV, "/");
 			}
 			case 'u':
 			case 'U':
@@ -619,137 +693,137 @@ namespace CppParser
 				// I can't Match these characters because if it's an identifier
 				// that starts with u8 I don't want to accidentally consume part of
 				// it before going to the identifier function
-				if (c == 'u' && Peek() == '8')
+				if (c == 'u' && Peek(data) == '8')
 				{
-					if (PeekNext() == '\'')
+					if (PeekNext(data) == '\'')
 					{
-						Match('8'); Match('\'');
-						return Character();
+						Match(data, '8'); Match(data, '\'');
+						return Character(data);
 					}
-					if (PeekNext() == '"')
+					if (PeekNext(data) == '"')
 					{
-						Match('8'); Match('"');
-						return String();
+						Match(data, '8'); Match(data, '"');
+						return String(data);
 					}
-					if (PeekNext() == 'R' && PeekNextNext() == '"')
+					if (PeekNext(data) == 'R' && PeekNextNext(data) == '"')
 					{
-						Match('8'); Match('R'); Match('"');
-						return String(true);
+						Match(data, '8'); Match(data, 'R'); Match(data, '"');
+						return String(data, true);
 					}
 				}
 				if (c == 'u')
 				{
-					if (Peek() == '\'')
+					if (Peek(data) == '\'')
 					{
-						Match('\'');
-						return Character();
+						Match(data, '\'');
+						return Character(data);
 					}
-					if (Peek() == '"')
+					if (Peek(data) == '"')
 					{
-						Match('"');
-						return String();
+						Match(data, '"');
+						return String(data);
 					}
-					if (Peek() == 'R' && PeekNext() == '"')
+					if (Peek(data) == 'R' && PeekNext(data) == '"')
 					{
-						Match('R'); Match('"');
-						return String(true);
+						Match(data, 'R'); Match(data, '"');
+						return String(data, true);
 					}
 				}
 				if (c == 'U')
 				{
-					if (Peek() == '\'')
+					if (Peek(data) == '\'')
 					{
-						Match('\'');
-						return Character();
+						Match(data, '\'');
+						return Character(data);
 					}
-					if (Peek() == '"')
+					if (Peek(data) == '"')
 					{
-						Match('"');
-						return String();
+						Match(data, '"');
+						return String(data);
 					}
-					if (Peek() == 'R' && PeekNext() == '"')
+					if (Peek(data) == 'R' && PeekNext(data) == '"')
 					{
-						Match('R'); Match('"');
-						return String(true);
+						Match(data, 'R'); Match(data, '"');
+						return String(data, true);
 					}
 				}
 				if (c == 'L')
 				{
-					if (Peek() == '\'')
+					if (Peek(data) == '\'')
 					{
-						Match('\'');
-						return Character();
+						Match(data, '\'');
+						return Character(data);
 					}
-					if (Peek() == '"')
+					if (Peek(data) == '"')
 					{
-						Match('"');
-						return String();
+						Match(data, '"');
+						return String(data);
 					}
-					if (Peek() == 'R' && PeekNext() == '"')
+					if (Peek(data) == 'R' && PeekNext(data) == '"')
 					{
-						Match('R'); Match('"');
-						return String(true);
+						Match(data, 'R'); Match(data, '"');
+						return String(data, true);
 					}
 				}
-				return PropertyIdentifier();
+				return PropertyIdentifier(data);
 			}
 			case 'R':
 			{
-				if (Peek() == '"')
+				if (Peek(data) == '"')
 				{
-					Match('R'); Match('"');
-					return String(true);
+					Match(data, 'R'); Match(data, '"');
+					return String(data, true);
 				}
-				return PropertyIdentifier();
+				return PropertyIdentifier(data);
 			}
 			case ' ':
 			case '\r':
 				// Ignore whitespace
-				m_Column++;
+				data.Column++;
 				return GenerateWhitespaceToken();
 			case '\t':
-				m_Column += 4;
+				data.Column += 4;
 				return GenerateWhitespaceToken();
 			case '\n':
 				// Record the new line, then continue
-				m_Column = 0;
-				m_Line++;
-				if (PeekPrevious(2) == '\\' || (PeekPrevious(2) == '\r' && PeekPrevious(3) == '\\'))
+				data.Column = 0;
+				data.Line++;
+				if (PeekPrevious(data, 2) == '\\' || (PeekPrevious(data, 2) == '\r' && PeekPrevious(data, 3) == '\\'))
 				{
 					return GenerateWhitespaceToken();
 				}
-				return GenerateToken(TokenType::NEWLINE, "\\n");
+				return GenerateToken(data, TokenType::NEWLINE, "\\n");
 			default:
 				if (IsDigit(c))
 				{
-					return Number(c);
+					return Number(data, c);
 				}
 				if (IsAlpha(c) || c == '_')
 				{
-					return PropertyIdentifier();
+					return PropertyIdentifier(data);
 				}
 				break;
 			}
 
-			return GenerateErrorToken();
+			return GenerateErrorToken(data);
 		}
 
-		static Token PropertyIdentifier()
+		static Token PropertyIdentifier(ScannerData& data)
 		{
-			while (IsAlphaNumeric(Peek()) || Peek() == '_') Advance();
+			while (IsAlphaNumeric(Peek(data)) || Peek(data) == '_') Advance(data);
 
-			std::string text = std::string(m_FileContents.substr(m_Start, m_Cursor - m_Start));
+			const char* text = ParserString::Substring(data.FileContents, data.Start, data.Cursor - data.Start);
 			TokenType type = TokenType::IDENTIFIER;
-			auto iter = keywords.find(text.c_str());
+			auto iter = keywords.find(text);
 			if (iter != keywords.end())
 			{
 				type = iter->second;
 			}
 
-			return Token{ m_Line, m_Column - (m_Cursor - m_Start), type, ParserString::CreateString(text.c_str()) };
+			return Token{ data.Line, data.Column - (data.Cursor - data.Start), type, text };
 		}
 
-		static Token Number(char firstDigit)
+		static Token Number(ScannerData& data, char firstDigit)
 		{
 			bool isHexadecimal = false;
 			bool isOctal = false;
@@ -758,15 +832,15 @@ namespace CppParser
 			{
 				// If the number starts with a 0x, it's hex, otherwise
 				// if it starts with a 0 and it's not followed by a '.' it's octal
-				if (Match('x') || Match('X'))
+				if (Match(data, 'x') || Match(data, 'X'))
 				{
 					isHexadecimal = true;
 				}
-				else if (Match('b') || Match('B'))
+				else if (Match(data, 'b') || Match(data, 'B'))
 				{
 					isBinary = true;
 				}
-				else if (Peek() != '.')
+				else if (Peek(data) != '.')
 				{
 					isOctal = true;
 				}
@@ -774,273 +848,249 @@ namespace CppParser
 
 			if (isHexadecimal)
 			{
-				return NumberHexadecimal();
+				return NumberHexadecimal(data);
 			}
 			else if (isOctal)
 			{
-				return NumberOctal();
+				return NumberOctal(data);
 			}
 			else if (isBinary)
 			{
-				return NumberBinary();
+				return NumberBinary(data);
 			}
-			return NumberDecimal(firstDigit);
+			return NumberDecimal(data, firstDigit);
 		}
 
-		static Token NumberDecimal(char firstDigit)
+		static Token NumberDecimal(ScannerData& data, char firstDigit)
 		{
-			while (firstDigit != '.' && IsDigit(Peek(), true))
+			while (firstDigit != '.' && IsDigit(Peek(data), true))
 			{
-				Advance();
+				Advance(data);
 			}
 
 			bool isFloatingPoint = false;
-			if (Match('.') || firstDigit == '.')
+			if (Match(data, '.') || firstDigit == '.')
 			{
 				isFloatingPoint = true;
 
-				while (IsDigit(Peek(), true))
+				while (IsDigit(Peek(data), true))
 				{
-					Advance();
+					Advance(data);
 				}
 			}
 
-			if (IsSameChar(Peek(), 'e', 'E') &&
-				(IsDigit(PeekNext()) ||
+			if (IsSameChar(Peek(data), 'e', 'E') &&
+				(IsDigit(PeekNext(data)) ||
 					(
-						(PeekNext() == '-' && IsDigit(PeekNextNext())) ||
-						(PeekNext() == '+' && IsDigit(PeekNextNext()))
+						(PeekNext(data) == '-' && IsDigit(PeekNextNext(data))) ||
+						(PeekNext(data) == '+' && IsDigit(PeekNextNext(data)))
 						)
 					)
 				)
 			{
 				isFloatingPoint = true;
-				Advance();
-				Advance();
-				while (IsDigit(Peek(), true))
+				Advance(data);
+				Advance(data);
+				while (IsDigit(Peek(data), true))
 				{
-					Advance();
+					Advance(data);
 				}
 
-				if ((Peek() == '-' || Peek() == '+') && IsDigit(PeekNext()))
+				if ((Peek(data) == '-' || Peek(data) == '+') && IsDigit(PeekNext(data)))
 				{
-					Advance();
-					while (IsDigit(Peek())) Advance();
+					Advance(data);
+					while (IsDigit(Peek(data))) Advance(data);
 				}
 
-				if (Peek() == '.')
+				if (Peek(data) == '.')
 				{
-					Logger::Error("Unexpected number literal at %d col:%d", m_Line, m_Column);
-					return GenerateErrorToken();
+					Logger::Error("Unexpected number literal at %d col:%d", data.Line, data.Column);
+					return GenerateErrorToken(data);
 				}
 			}
 
 			// This bit is just to consume the trailing 'f' or 'l'
 			if (isFloatingPoint)
 			{
-				if (IsSameChar(Peek(), 'f', 'F'))
+				if (IsSameChar(Peek(data), 'f', 'F'))
 				{
-					Match(Peek());
+					Match(data, Peek(data));
 				}
-				else if (IsSameChar(Peek(), 'l', 'L'))
+				else if (IsSameChar(Peek(data), 'l', 'L'))
 				{
-					Match(Peek());
+					Match(data, Peek(data));
 				}
 			}
 
 			if (!isFloatingPoint)
 			{
-				ConsumeTrailingUnsignedLong();
+				ConsumeTrailingUnsignedLong(data);
 
-				return Token{ m_Line, m_Column - (m_Cursor - m_Start), TokenType::INTEGER_LITERAL, ParserString::CreateString(m_FileContents.substr(m_Start, m_Cursor - m_Start).c_str()) };
+				return Token{ data.Line, data.Column - (data.Cursor - data.Start), TokenType::INTEGER_LITERAL,
+					ParserString::Substring(data.FileContents, data.Start, data.Cursor - data.Start) };
 			}
 
-			return Token{ m_Line, m_Column - (m_Cursor - m_Start), TokenType::FLOATING_POINT_LITERAL, ParserString::CreateString(m_FileContents.substr(m_Start, m_Cursor - m_Start).c_str()) };
+			return Token{ data.Line, data.Column - (data.Cursor - data.Start), TokenType::FLOATING_POINT_LITERAL,
+				ParserString::Substring(data.FileContents, data.Start, data.Cursor - data.Start) };
 		}
 
-		static Token NumberHexadecimal()
+		static Token NumberHexadecimal(ScannerData& data)
 		{
-			while (IsHexDigit(Peek(), true)) Advance();
-			ConsumeTrailingUnsignedLong();
+			while (IsHexDigit(Peek(data), true)) Advance(data);
+			ConsumeTrailingUnsignedLong(data);
 
-			return Token{ m_Line, m_Column - (m_Cursor - m_Start), TokenType::INTEGER_LITERAL, ParserString::CreateString(m_FileContents.substr(m_Start, m_Cursor - m_Start).c_str()) };
+			return Token{ data.Line, data.Column - (data.Cursor - data.Start), TokenType::INTEGER_LITERAL,
+				ParserString::Substring(data.FileContents, data.Start, data.Cursor - data.Start) };
 		}
 
-		static Token NumberBinary()
+		static Token NumberBinary(ScannerData& data)
 		{
-			while (Peek() == '0' || Peek() == '1' || Peek() == '\'') Advance();
-			ConsumeTrailingUnsignedLong();
+			while (Peek(data) == '0' || Peek(data) == '1' || Peek(data) == '\'') Advance(data);
+			ConsumeTrailingUnsignedLong(data);
 
-			return Token{ m_Line, m_Column - (m_Cursor - m_Start), TokenType::INTEGER_LITERAL, ParserString::CreateString(m_FileContents.substr(m_Start, m_Cursor - m_Start).c_str()) };
+			return Token{ data.Line, data.Column - (data.Cursor - data.Start), TokenType::INTEGER_LITERAL,
+				ParserString::Substring(data.FileContents, data.Start, data.Cursor - data.Start) };
 		}
 
-		static Token NumberOctal()
+		static Token NumberOctal(ScannerData& data)
 		{
-			while (Peek() >= '0' && Peek() <= '7' || Peek() == '\'') Advance();
-			ConsumeTrailingUnsignedLong();
+			while (Peek(data) >= '0' && Peek(data) <= '7' || Peek(data) == '\'') Advance(data);
+			ConsumeTrailingUnsignedLong(data);
 
-			return Token{ m_Line, m_Column - (m_Cursor - m_Start), TokenType::INTEGER_LITERAL, ParserString::CreateString(m_FileContents.substr(m_Start, m_Cursor - m_Start).c_str()) };
+			return Token{ data.Line, data.Column - (data.Cursor - data.Start), TokenType::INTEGER_LITERAL,
+				ParserString::Substring(data.FileContents, data.Start, data.Cursor - data.Start) };
 		}
 
-		static void ConsumeTrailingUnsignedLong()
+		static void ConsumeTrailingUnsignedLong(ScannerData& data)
 		{
 			// consume up to 3 'u' or 'l' characters
-			if (IsSameChar(Peek(), 'u', 'U'))
+			if (IsSameChar(Peek(data), 'u', 'U'))
 			{
-				Match(Peek());
+				Match(data, Peek(data));
 			}
 
-			if (IsSameChar(Peek(), 'l', 'L'))
+			if (IsSameChar(Peek(data), 'l', 'L'))
 			{
-				Match(Peek());
+				Match(data, Peek(data));
 			}
 
-			if (IsSameChar(Peek(), 'l', 'L'))
+			if (IsSameChar(Peek(data), 'l', 'L'))
 			{
-				Match(Peek());
+				Match(data, Peek(data));
 			}
 		}
 
 
-		static Token Character()
+		static Token Character(ScannerData& data)
 		{
 			// The first apostrophe ' has already been consume at this point
-			while (Peek() != '\'' && !AtEnd())
+			while (Peek(data) != '\'' && !AtEnd(data))
 			{
-				if (Peek() == '\n')
+				if (Peek(data) == '\n')
 				{
-					Logger::Warning("Invalid character literal encountered while scanning at line: %d:%d", m_Line, m_Column);
-					m_Line++;
-					m_Column = -1;
+					Logger::Warning("Invalid character literal encountered while scanning at line: %d:%d", data.Line, data.Column);
+					data.Line++;
+					data.Column = -1;
 					break;
 				}
 				// Skip over any escaped quotes
-				if (Peek() == '\\' && PeekNext() == '\'')
+				if (Peek(data) == '\\' && PeekNext(data) == '\'')
 				{
-					Advance();
+					Advance(data);
 				}
 				// Skip over escaped back slashes so that it doesn't accidentally skip an end quote
-				if (Peek() == '\\' && PeekNext() == '\\')
+				if (Peek(data) == '\\' && PeekNext(data) == '\\')
 				{
-					Advance();
+					Advance(data);
 				}
-				Advance();
+				Advance(data);
 			}
 
-			if (AtEnd())
+			if (AtEnd(data))
 			{
 				// TODO: This might not need to be here
-				Logger::Warning("Unexpected character literal encountered while scanning at line %d:%d. We hit the end of the file.", m_Line, m_Column);
-				return GenerateErrorToken();
+				Logger::Warning("Unexpected character literal encountered while scanning at line %d:%d. We hit the end of the file.", data.Line, data.Column);
+				return GenerateErrorToken(data);
 			}
 
-			Advance();
+			Advance(data);
 
-			std::string value = m_FileContents.substr(m_Start, m_Cursor - m_Start);
-			return Token{ m_Line, m_Column - (m_Cursor - m_Start), TokenType::CHARACTER_LITERAL, ParserString::CreateString(value.c_str()) };
+			return Token{ data.Line, data.Column - (data.Cursor - data.Start), TokenType::CHARACTER_LITERAL,
+				ParserString::Substring(data.FileContents, data.Start, data.Cursor - data.Start) };
 		}
 
-		static Token String(bool isRawStringLiteral)
+		static Token String(ScannerData& data, bool isRawStringLiteral)
 		{
 			if (isRawStringLiteral)
 			{
-				int matchStart = m_Cursor;
-				while (Peek() != '(')
+				int matchStart = data.Cursor;
+				while (Peek(data) != '(')
 				{
-					Advance();
+					Advance(data);
 				}
-				std::string strToMatch = ")";
-				if (m_Cursor > matchStart)
+				const char* strToMatch = ")";
+				if (data.Cursor > matchStart)
 				{
-					strToMatch += m_FileContents.substr(matchStart, m_Cursor - matchStart);
+					const char* newStrToMatch = ParserString::Substring(data.FileContents, matchStart, data.Cursor - matchStart);
+					ParserString::FreeString(strToMatch);
+					strToMatch = newStrToMatch;
 				}
+				int strToMatchLength = ParserString::StringLength(strToMatch);
 
-				while (!AtEnd())
+				while (!AtEnd(data))
 				{
-					if (Peek() == ')')
+					if (Peek(data) == ')')
 					{
-						std::string fileSubstr = m_FileContents.substr(m_Cursor, strToMatch.size());
+						const char* fileSubstr = ParserString::Substring(data.FileContents, data.Cursor, strToMatchLength);
 						if (fileSubstr == strToMatch)
 						{
-							for (int i = 0; i < strToMatch.size(); i++)
+							for (int i = 0; i < strToMatchLength; i++)
 							{
-								Advance();
+								Advance(data);
 							}
+							ParserString::FreeString(fileSubstr);
 							break;
 						}
+						ParserString::FreeString(fileSubstr);
 					}
-					Advance();
+					Advance(data);
 				}
+
+				ParserString::FreeString(strToMatch);
 			}
 			else
 			{
 
-				while (Peek() != '"' && !AtEnd())
+				while (Peek(data) != '"' && !AtEnd(data))
 				{
-					if (Peek() == '\n')
+					if (Peek(data) == '\n')
 					{
-						m_Line++;
-						m_Column = -1;
+						data.Line++;
+						data.Column = -1;
 					}
-					Advance();
+					Advance(data);
 				}
 			}
 
-			if (AtEnd())
+			if (AtEnd(data))
 			{
-				Logger::Error("Unexpected string literal at %d col:%d", m_Line, m_Column);
-				return GenerateErrorToken();
+				Logger::Error("Unexpected string literal at %d col:%d", data.Line, data.Column);
+				return GenerateErrorToken(data);
 			}
 
-			Advance();
+			Advance(data);
 
 			if (!isRawStringLiteral)
 			{
 				// Remove thes start and end quotes
-				std::string value = m_FileContents.substr(m_Start + (unsigned long long)1, (unsigned long long)m_Cursor - m_Start - (unsigned long long)2);
-				return Token{ m_Line, m_Column - (m_Cursor - m_Start), TokenType::STRING_LITERAL, ParserString::CreateString(value.c_str()) };
+				const char* value = ParserString::Substring(data.FileContents, data.Start + (unsigned long long)1, (unsigned long long)data.Cursor - data.Start - (unsigned long long)2);
+				return Token{ data.Line, data.Column - (data.Cursor - data.Start), TokenType::STRING_LITERAL, value };
 			}
 			else
 			{
-				std::string value = m_FileContents.substr(m_Start, (unsigned long long)m_Cursor - (unsigned long long)m_Start);
-				return Token{ m_Line, m_Column - (m_Cursor - m_Start), TokenType::STRING_LITERAL, ParserString::CreateString(value.c_str()) };
+				const char* value = ParserString::Substring(data.FileContents, data.Start, (unsigned long long)data.Cursor - (unsigned long long)data.Start);
+				return Token{ data.Line, data.Column - (data.Cursor - data.Start), TokenType::STRING_LITERAL, value };
 			}
-		}
-
-		static char Advance()
-		{
-			char c = m_FileContents[m_Cursor];
-			m_Cursor++;
-			m_Column++;
-			return c;
-		}
-
-		static char Peek()
-		{
-			if (AtEnd()) return '\0';
-			return m_FileContents[m_Cursor];
-		}
-
-		static char PeekNext()
-		{
-			if (AtEnd() || m_Cursor == m_FileContents.size() - 1) return '\0';
-			return m_FileContents[m_Cursor + 1];
-		}
-
-		static char PeekNextNext()
-		{
-			if (AtEnd() || m_Cursor == m_FileContents.size() - 1 || m_Cursor == m_FileContents.size() - 2) return '\0';
-			return m_FileContents[m_Cursor + 2];
-		}
-
-		static bool Match(char expected)
-		{
-			if (AtEnd()) return false;
-			if (m_FileContents[m_Cursor] != expected) return false;
-
-			m_Cursor++;
-			m_Column++;
-			return true;
 		}
 	}
 }

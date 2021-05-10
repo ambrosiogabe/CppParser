@@ -62,11 +62,6 @@ namespace CppParser
 		const char* m_Lexeme;
 		// void* m_Literal;
 	};
-
-	namespace CppTokens
-	{
-		Token CreateToken(int line, int column, TokenType type, const char* str);
-	}
 }
 
 #endif

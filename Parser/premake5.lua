@@ -21,6 +21,12 @@ project "CppParser"
         "vendor/CppUtils/SingleInclude"
     }
     
+    filter { "Debug" }
+        buildoptions "/MTd"
+        defines {
+            "_DEBUG"
+        }
+
     filter { "system:Unix", "system:Mac" }
         systemversion "latest"
 
