@@ -257,11 +257,12 @@ namespace CppParser
 
 			for (int i = 0; i < replacementListResult.size(); i++)
 			{
-				Token& token = replacementListResult[i];
 				int parameterIndex = 0;
 				currentToken = replacementListTokenStart;
 				for (Token& identifier : functionIdentifiers)
 				{
+					Token token = replacementListResult[i];
+
 					// If we have the same lexeme here
 					if (ParserString::Compare(identifier.m_Lexeme, token.m_Lexeme))
 					{
@@ -312,7 +313,10 @@ namespace CppParser
 					}
 					parameterIndex++;
 				}
-				token.m_Line = newLine;
+
+				// Make sure to copy the strings for the new tokens so we don't run into issues when freeing the memory
+				replacementListResult[i].m_Lexeme = ParserString::Copy(replacementListResult[i].m_Lexeme);
+				replacementListResult[i].m_Line = newLine;
 			}
 			return replacementListResult;
 		}

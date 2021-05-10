@@ -8726,7 +8726,6 @@ result->type = pType;
 			{
 				auto currentPosition = data.Tokens.begin() + data.CurrentToken;
 				data.Tokens.insert(replacement.begin(), replacement.end(), data.CurrentToken);
-				//data.Tokens.insert(currentPosition, replacement.begin(), replacement.end());
 				int macroTokenLength = 0;
 				if (isFunctionMacro)
 				{
@@ -8735,15 +8734,8 @@ result->type = pType;
 					Logger::Assert(tmpCursor + 1 < data.Tokens.size() && data.Tokens[tmpCursor + 1].m_Type == TokenType::LEFT_PAREN, "Invalid function macro. Must begin with a '('");
 					while (tmpCursor < data.Tokens.size())
 					{
-						// Only free the strings for the tokens that aren't part of the stuff we just pasted.
-						// So in a macro that's expanded from something like ( (a + b), b + c ), we would want to
-						// get rid of the surrounding parenthises, and all commas at the first level of grouping
 						if (data.Tokens[tmpCursor].m_Type == TokenType::LEFT_PAREN)
 						{
-							if (grouping == 0)
-							{
-								ParserString::FreeString(data.Tokens[tmpCursor].m_Lexeme);
-							}
 							grouping++;
 						}
 						else if (data.Tokens[tmpCursor].m_Type == TokenType::RIGHT_PAREN)
@@ -8751,17 +8743,18 @@ result->type = pType;
 							grouping--;
 							if (grouping <= 0)
 							{
-								ParserString::FreeString(data.Tokens[tmpCursor].m_Lexeme);
 								break;
 							}
-						}
-						else if (data.Tokens[tmpCursor].m_Type == TokenType::COMMA && grouping == 1)
-						{
-							ParserString::FreeString(data.Tokens[tmpCursor].m_Lexeme);
 						}
 						macroTokenLength++;
 						tmpCursor++;
 					}
+				}
+
+				// Free the strings then remove the excess tokens
+				for (int i = data.CurrentToken + replacement.size(); i <= data.CurrentToken + replacement.size() + macroTokenLength; i++)
+				{
+					ParserString::FreeString(data.Tokens[i].m_Lexeme);
 				}
 				data.Tokens.removeRange(data.CurrentToken + replacement.size(), data.CurrentToken + replacement.size() + macroTokenLength);
 			}
@@ -8900,17 +8893,14 @@ result->type = pType;
 			}
 		}
 
-		static void ExpandDefineMacros(ParserData& data)
+		static void ExpandDefineMacros(ParserData& data, PreprocessingAstNode* preprocessedTree)
 		{
-			int tokensSize = data.Tokens.size();
-			data.CurrentToken = 0;
-			PreprocessingAstNode* preprocessedTree = ParsePreprocessingFile(data);
 			WalkPreprocessingTree(preprocessedTree, walkSimpleMacroDefine, PreprocessingAstNodeType::MacroDefine, false);
 			WalkPreprocessingTree(preprocessedTree, walkMacroDefineFunction, PreprocessingAstNodeType::MacroDefineFunction, false);
 			WalkPreprocessingTree(preprocessedTree, walkMacroUndefine, PreprocessingAstNodeType::MacroUndef, false);
 
 			data.CurrentToken = 0;
-			while (data.CurrentToken < tokensSize)
+			while (data.CurrentToken < data.Tokens.size())
 			{
 				Token& token = GetCurrentToken(data);
 				if (GetCurrentToken(data).m_Type == TokenType::HASHTAG)
@@ -8933,7 +8923,6 @@ result->type = pType;
 					if (replacement.size() > 0)
 					{
 						PasteReplacementListHere(data, replacement, Symbols::IsFunctionMacroDefine(PreprocessingSymbolTable, token));
-						tokensSize = data.Tokens.size();
 					}
 					else
 					{
@@ -8955,7 +8944,10 @@ result->type = pType;
 			RemoveSpecialTokens(data);
 
 			// Expand all macros
-			ExpandDefineMacros(data);
+			data.CurrentToken = 0;
+			PreprocessingAstNode* preprocessedTree = ParsePreprocessingFile(data);
+			ExpandDefineMacros(data, preprocessedTree);
+			FreePreprocessingNode(preprocessedTree);
 
 			RemoveWhitespaceTokens(data);
 		}
