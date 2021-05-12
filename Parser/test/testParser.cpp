@@ -36,8 +36,10 @@ public:
 	~CompletelyDifferentParser();
 	void WoahThere();
 
+#ifdef _WIN32
 private:
 	float m_DumbMember;
+#endif
 };
 
 #endif

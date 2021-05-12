@@ -5,6 +5,7 @@
 #include "cppParser/Symbols.h"
 #include "CppUtils/CppUtils.h"
 #include "cppParser/ParserString.h"
+#include "cppParser/PredefinedMacros.h"
 
 #include <algorithm>
 #include <cstring>
@@ -17,13 +18,12 @@ namespace CppParser
 		using namespace CppUtils;
 
 		// Internal variables
-		static PPSymbolTable PreprocessingSymbolTable;
 		static std::vector<std::filesystem::path> FilesSeen = {};
 
 		static void FreeTree(AstNode* tree);
 		static AstNode* ParseTranslationUnit(const char* fileBeingParsed, std::vector<std::filesystem::path>& includeDirs, ParserData& data);
 
-		ParserData Parse(const char* fileBeingParsed, std::vector<std::filesystem::path>& includeDirs)
+		ParserData Parse(const char* fileBeingParsed, std::vector<std::filesystem::path>& includeDirs, int osDefinitions)
 		{
 			FilesSeen.clear();
 			List<Token> tokens = ScriptScanner::ScanTokens("testParser.cpp");
@@ -31,8 +31,41 @@ namespace CppParser
 			ParserData data = {
 				tokens,
 				0,
-				nullptr
+				nullptr,
+				PPSymbolTable()
 			};
+
+			if ((osDefinitions & (int)PredefinedMacros::Android) == (int)PredefinedMacros::Android)
+			{
+				Symbols::AddGlobalDefineSymbol(data.PreprocessingSymbolTable, "__ANDROID__");
+			}
+			if ((osDefinitions & (int)PredefinedMacros::Apple) == (int)PredefinedMacros::Apple)
+			{
+				Symbols::AddGlobalDefineSymbol(data.PreprocessingSymbolTable, "__APPLE__");
+				Symbols::AddGlobalDefineSymbol(data.PreprocessingSymbolTable, "__MACH__");
+			}
+			if ((osDefinitions & (int)PredefinedMacros::FreeBSD) == (int)PredefinedMacros::FreeBSD)
+			{
+				Symbols::AddGlobalDefineSymbol(data.PreprocessingSymbolTable, "__FreeBSD__");
+			}
+			if ((osDefinitions & (int)PredefinedMacros::Linux) == (int)PredefinedMacros::Linux)
+			{
+				Symbols::AddGlobalDefineSymbol(data.PreprocessingSymbolTable, "__linux__");
+			}
+			if ((osDefinitions & (int)PredefinedMacros::Unix) == (int)PredefinedMacros::Unix)
+			{
+				Symbols::AddGlobalDefineSymbol(data.PreprocessingSymbolTable, "unix");
+				Symbols::AddGlobalDefineSymbol(data.PreprocessingSymbolTable, "__unix");
+				Symbols::AddGlobalDefineSymbol(data.PreprocessingSymbolTable, "__unix__");
+			}
+			if ((osDefinitions & (int)PredefinedMacros::Win32) == (int)PredefinedMacros::Win32)
+			{
+				Symbols::AddGlobalDefineSymbol(data.PreprocessingSymbolTable, "_WIN32");
+			}
+			if ((osDefinitions & (int)PredefinedMacros::Win64) == (int)PredefinedMacros::Win64)
+			{
+				Symbols::AddGlobalDefineSymbol(data.PreprocessingSymbolTable, "_WIN64");
+			}
 
 			AstNode* result = ParseTranslationUnit(fileBeingParsed, includeDirs, data);
 			data.Tree = result;
@@ -8854,19 +8887,22 @@ result->type = pType;
 			}
 		}
 
-		static void walkSimpleMacroDefine(PreprocessingAstNode* node)
+		static void walkSimpleMacroDefine(PreprocessingAstNode* node, void* userData)
 		{
-			Symbols::AddDefineSymbol(PreprocessingSymbolTable, node->macroDefine.identifier, node->macroDefine.identifier.m_Line, node);
+			ParserData* data = (ParserData*)userData;
+			Symbols::AddDefineSymbol(data->PreprocessingSymbolTable, node->macroDefine.identifier, node->macroDefine.identifier.m_Line, node);
 		}
 
-		static void walkMacroDefineFunction(PreprocessingAstNode* node)
+		static void walkMacroDefineFunction(PreprocessingAstNode* node, void* userData)
 		{
-			Symbols::AddDefineSymbol(PreprocessingSymbolTable, node->macroDefine.identifier, node->macroDefine.identifier.m_Line, node);
+			ParserData* data = (ParserData*)userData;
+			Symbols::AddDefineSymbol(data->PreprocessingSymbolTable, node->macroDefine.identifier, node->macroDefine.identifier.m_Line, node);
 		}
 
-		static void walkMacroUndefine(PreprocessingAstNode* node)
+		static void walkMacroUndefine(PreprocessingAstNode* node, void* userData)
 		{
-			Symbols::AddUndefine(PreprocessingSymbolTable, node->macroUndef.identifier, node->macroUndef.identifier.m_Line);
+			ParserData* data = (ParserData*)userData;
+			Symbols::AddUndefine(data->PreprocessingSymbolTable, node->macroUndef.identifier, node->macroUndef.identifier.m_Line);
 		}
 
 		static void ExpandIncludes(const char* fileBeingParsed, const std::vector<std::filesystem::path>& includeDirs, ParserData& data)
@@ -8922,9 +8958,9 @@ result->type = pType;
 
 		static void ExpandDefineMacros(ParserData& data, PreprocessingAstNode* preprocessedTree)
 		{
-			WalkPreprocessingTree(preprocessedTree, walkSimpleMacroDefine, PreprocessingAstNodeType::MacroDefine, false);
-			WalkPreprocessingTree(preprocessedTree, walkMacroDefineFunction, PreprocessingAstNodeType::MacroDefineFunction, false);
-			WalkPreprocessingTree(preprocessedTree, walkMacroUndefine, PreprocessingAstNodeType::MacroUndef, false);
+			WalkPreprocessingTree(preprocessedTree, &data, walkSimpleMacroDefine, PreprocessingAstNodeType::MacroDefine, false);
+			WalkPreprocessingTree(preprocessedTree, &data, walkMacroDefineFunction, PreprocessingAstNodeType::MacroDefineFunction, false);
+			WalkPreprocessingTree(preprocessedTree, &data, walkMacroUndefine, PreprocessingAstNodeType::MacroUndef, false);
 
 			data.CurrentToken = 0;
 			while (data.CurrentToken < data.Tokens.size())
@@ -8944,12 +8980,12 @@ result->type = pType;
 						}
 					}
 				}
-				else if (GetCurrentToken(data).m_Type == TokenType::IDENTIFIER && Symbols::IsSymbol(PreprocessingSymbolTable, token))
+				else if (GetCurrentToken(data).m_Type == TokenType::IDENTIFIER && Symbols::IsSymbol(data.PreprocessingSymbolTable, token))
 				{
-					List<Token> replacement = Symbols::ExpandMacro(PreprocessingSymbolTable, data.CurrentToken, data.Tokens);
+					List<Token> replacement = Symbols::ExpandMacro(data.PreprocessingSymbolTable, data.CurrentToken, data.Tokens);
 					if (replacement.size() > 0)
 					{
-						PasteReplacementListHere(data, replacement, Symbols::IsFunctionMacroDefine(PreprocessingSymbolTable, token));
+						PasteReplacementListHere(data, replacement, Symbols::IsFunctionMacroDefine(data.PreprocessingSymbolTable, token));
 					}
 					else
 					{
@@ -9017,6 +9053,7 @@ result->type = pType;
 		static int FindIfBlockEnd(const ParserData& data, int startingFrom)
 		{
 			int tmpCursor = data.CurrentToken;
+			int level = 0;
 			while (tmpCursor < data.Tokens.size())
 			{
 				Token token = GetCurrentToken(data);
@@ -9028,8 +9065,20 @@ result->type = pType;
 					{
 						if (ParserString::Compare(identifier.m_Lexeme, "endif"))
 						{
-							return tmpCursor;
+							level--;
+							if (level <= 0)
+							{
+								return tmpCursor;
+							}
 						}
+						else if (ParserString::Compare(identifier.m_Lexeme, "ifdef") || ParserString::Compare(identifier.m_Lexeme, "ifndef"))
+						{
+							level++;
+						}
+					}
+					else if (identifier.m_Type == TokenType::KW_IF)
+					{
+						level++;
 					}
 				}
 				tmpCursor++;
@@ -9041,6 +9090,7 @@ result->type = pType;
 		static PreprocessIfBlockDTO FindNextElifBlock(const ParserData& data)
 		{
 			int tmpCursor = data.CurrentToken;
+			int level = 0;
 			while (tmpCursor < data.Tokens.size())
 			{
 				Token token = GetCurrentToken(data);
@@ -9052,16 +9102,31 @@ result->type = pType;
 					{
 						if (ParserString::Compare(identifier.m_Lexeme, "endif"))
 						{
-							return { PreprocessIfBlockType::Endif, tmpCursor };
+							if (level <= 0)
+							{
+								return { PreprocessIfBlockType::Endif, tmpCursor };
+							}
+							level--;
 						}
 						else if (ParserString::Compare(identifier.m_Lexeme, "elif"))
 						{
-							return { PreprocessIfBlockType::Elif, tmpCursor };
+							if (level <= 0)
+							{
+								return { PreprocessIfBlockType::Elif, tmpCursor };
+							}
+						}
+						else if (ParserString::Compare(identifier.m_Lexeme, "ifdef") || ParserString::Compare(identifier.m_Lexeme, "ifndef"))
+						{
+							level++;
 						}
 					}
 					else if (identifier.m_Type == TokenType::KW_ELSE)
 					{
 						return { PreprocessIfBlockType::Else, tmpCursor };
+					}
+					else if (identifier.m_Type == TokenType::KW_IF)
+					{
+						level++;
 					}
 				}
 				tmpCursor++;
@@ -9261,7 +9326,7 @@ result->type = pType;
 				{
 					Logger::Info("We are inside an ifdef or ifndef block");
 					Token& symbol = ConsumeCurrent(data, TokenType::IDENTIFIER);
-					bool symbolDefined = Symbols::IsDefined(PreprocessingSymbolTable, symbol);
+					bool symbolDefined = Symbols::IsDefined(data.PreprocessingSymbolTable, symbol);
 					if (symbolDefined && ifBlockStart.type == PreprocessIfBlockType::IfDef)
 					{
 						// If the symbol is defined and we are in an ifdef block, this is the section we want to keep
@@ -9300,7 +9365,6 @@ result->type = pType;
 						ParserString::FreeString(data.Tokens[i].m_Lexeme);
 					}
 					data.Tokens.removeRange(keepMeEnd, ifBlockEnd);
-					ifBlockStart = FindIfBlockStart(data, keepMeEnd);
 				}
 				else
 				{
@@ -9350,7 +9414,6 @@ result->type = pType;
 							ParserString::FreeString(data.Tokens[i].m_Lexeme);
 						}
 						data.Tokens.removeRange(keepMeEnd, ifBlockEnd);
-						ifBlockStart = FindIfBlockStart(data, keepMeEnd);
 					}
 					else
 					{
@@ -9361,9 +9424,9 @@ result->type = pType;
 						}
 						data.Tokens.removeRange(ifBlockStart.tokenPosition, ifBlockEnd);
 					}
-
-					ifBlockStart = FindIfBlockStart(data, keepMeEnd);
 				}
+				data.CurrentToken = ifBlockStart.tokenPosition;
+				ifBlockStart = FindIfBlockStart(data, data.CurrentToken);
 			}
 		}
 

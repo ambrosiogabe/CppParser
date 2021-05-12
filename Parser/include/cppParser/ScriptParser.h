@@ -2,6 +2,7 @@
 #define GABE_PARSER_SCRIPT_PARSER
 #include "cppParser/ScriptScanner.h"
 #include "cppParser/Ast.h"
+#include "cppParser/Symbols.h"
 #include "CppUtils/CppUtils.h"
 
 #include <filesystem>
@@ -20,13 +21,14 @@ namespace CppParser
 		List<Token> Tokens;
 		int CurrentToken;
 		AstNode* Tree;
+		PPSymbolTable PreprocessingSymbolTable;
 	};
 
 	namespace Parser
 	{
 		using namespace CppUtils;
 
-		ParserData Parse(const char* file, std::vector<std::filesystem::path>& includeDirs);
+		ParserData Parse(const char* file, std::vector<std::filesystem::path>& includeDirs, int osDefinitions);
 		void FreeParserData(ParserData& parserData);
 
 		// Walk tree functions

@@ -5,6 +5,14 @@
 
 namespace CppParser
 {
+	PPSymbolTable::~PPSymbolTable()
+	{
+		for (int i = 0; i < DefineSymbols.size(); i++)
+		{
+			ParserString::FreeString(DefineSymbols[i].token.m_Lexeme);
+		}
+	}
+
 	namespace Symbols
 	{
 		using namespace CppUtils;
@@ -49,7 +57,25 @@ namespace CppParser
 				}
 			}
 
-			symbolTable.DefineSymbols.push(DefineSymbol{ symbolTree, macroIdentifierToken, tokenHash, lineDefined, INT_MAX });
+			Token newToken = macroIdentifierToken;
+			newToken.m_Lexeme = ParserString::CreateString(macroIdentifierToken.m_Lexeme);
+			symbolTable.DefineSymbols.push(DefineSymbol{ symbolTree, newToken, tokenHash, lineDefined, INT_MAX });
+		}
+
+		void AddGlobalDefineSymbol(PPSymbolTable& symbolTable, const char* symbolName)
+		{
+			Token tmpToken{ -1, -1, TokenType::IDENTIFIER, ParserString::CreateString(symbolName) };
+			unsigned long tokenHash = HashToken(tmpToken);
+			for (const DefineSymbol& hash : symbolTable.DefineSymbols)
+			{
+				if (IsSameHashData(tmpToken, tokenHash, tmpToken.m_Line, hash))
+				{
+					Logger::Warning("Tried to redefine global macro '%s'", tmpToken.m_Lexeme);
+					return;
+				}
+			}
+
+			symbolTable.DefineSymbols.push(DefineSymbol{ nullptr, tmpToken, tokenHash, -1, INT_MAX });
 		}
 
 		List<Token> ExpandMacro(const PPSymbolTable& symbolTable, int currentToken, const List<Token>& tokens)
@@ -66,13 +92,20 @@ namespace CppParser
 						return {};
 					}
 
-					if (hash.symbolTree->type == PreprocessingAstNodeType::MacroDefine)
+					if (hash.symbolTree != nullptr)
 					{
-						return ExpandSimpleMacro(symbolTable, hash.symbolTree, token.m_Line);
+						if (hash.symbolTree->type == PreprocessingAstNodeType::MacroDefine)
+						{
+							return ExpandSimpleMacro(symbolTable, hash.symbolTree, token.m_Line);
+						}
+						else if (hash.symbolTree->type == PreprocessingAstNodeType::MacroDefineFunction)
+						{
+							return ExpandFunctionMacro(symbolTable, hash.symbolTree, token.m_Line, tokens, currentToken);
+						}
 					}
-					else if (hash.symbolTree->type == PreprocessingAstNodeType::MacroDefineFunction)
+					else
 					{
-						return ExpandFunctionMacro(symbolTable, hash.symbolTree, token.m_Line, tokens, currentToken);
+						return List<Token>();
 					}
 				}
 			}

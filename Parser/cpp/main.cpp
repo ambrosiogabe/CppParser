@@ -9,6 +9,7 @@
 #include "cppParser/ScriptScanner.h"
 #include "cppParser/ScriptParser.h"
 #include "cppParser/ParserString.h"
+#include "cppParser/PredefinedMacros.h"
 
 #include <filesystem>
 
@@ -32,8 +33,16 @@ int main()
 		using namespace CppParser;
 		using namespace CppUtils;
 
+		int osDefinitions = 0;
+		osDefinitions |= ANDROID_DEFINED ? (int)PredefinedMacros::Android : (int)PredefinedMacros::None;
+		osDefinitions |= APPLE_DEFINED ? (int)PredefinedMacros::Apple : (int)PredefinedMacros::None;
+		osDefinitions |= WIN32_DEFINED ? (int)PredefinedMacros::Win32 : (int)PredefinedMacros::None;
+		osDefinitions |= WIN64_DEFINED ? (int)PredefinedMacros::Win64 : (int)PredefinedMacros::None;
+		osDefinitions |= LINUX_DEFINED ? (int)PredefinedMacros::Linux : (int)PredefinedMacros::None;
+		osDefinitions |= UNIX_DEFINED ? (int)PredefinedMacros::Unix : (int)PredefinedMacros::None;
+		osDefinitions |= FREE_BSD_DEFINED ? (int)PredefinedMacros::FreeBSD : (int)PredefinedMacros::None;
 		std::vector<std::filesystem::path> includeDirs = {};
-		ParserData parserData = Parser::Parse("testParser.cpp", includeDirs);
+		ParserData parserData = Parser::Parse("testParser.cpp", includeDirs, osDefinitions);
 		//Parser::WalkTree(parseTree, CppParser::PrintClasses, false, AstNodeType::ClassVirtualHead);
 		Parser::FreeParserData(parserData);
 	}
