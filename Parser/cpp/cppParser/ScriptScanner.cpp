@@ -416,6 +416,46 @@ namespace CppParser
 			}
 		}
 
+		void WriteTokensToFile(const List<Token>& tokens, const char* filename)
+		{
+			StringBuilder sb = StringBuilder();
+			for (const Token& token : tokens)
+			{
+				const Token& nextToken = &token == tokens.end() ? Token() : *(&(token) + 1);
+				if (token.m_Type != TokenType::NEWLINE && token.m_Type != TokenType::STRING_LITERAL && token.m_Type != TokenType::PREPROCESSING_FILE_BEGIN &&
+					token.m_Type != TokenType::PREPROCESSING_FILE_END)
+				{
+					sb.Append(token.m_Lexeme);
+				}
+				else if (token.m_Type == TokenType::STRING_LITERAL)
+				{
+					sb.Append('"');
+					sb.Append(token.m_Lexeme);
+					sb.Append('"');
+				}
+				else if (token.m_Type == TokenType::PREPROCESSING_FILE_BEGIN || token.m_Type == TokenType::PREPROCESSING_FILE_END)
+				{
+					if (token.m_Type == TokenType::PREPROCESSING_FILE_BEGIN)
+						sb.Append("// File Begin: ");
+					else
+						sb.Append("// File End: ");
+					sb.Append(token.m_Lexeme);
+				}
+				else 
+				{
+					sb.Append('\n');
+				}
+
+				if ((token.m_Type == TokenType::IDENTIFIER && (nextToken.m_Type == TokenType::IDENTIFIER || nextToken.m_Type == TokenType::EQUAL)) || 
+					token.m_Type == TokenType::EQUAL || keywords.find(token.m_Lexeme) != keywords.end())
+				{
+					sb.Append(' ');
+				}
+			}
+
+			FileIO::DefaultWriteFile(filename, sb.c_str());
+		}
+
 		List<Token> ScanTokens(const char* filepath, bool includeWhitespace)
 		{
 			List<Token> tokens;
@@ -449,6 +489,7 @@ namespace CppParser
 						tokens.push(token);
 				}
 
+				tokens.push(Token{ -1, data.Column, TokenType::NEWLINE, ParserString::CreateString("\\n") });
 				tokens.push(Token{ -1, data.Column, TokenType::END_OF_FILE, ParserString::CreateString("EOF") });
 			}
 
@@ -810,7 +851,7 @@ namespace CppParser
 
 		static Token PropertyIdentifier(ScannerData& data)
 		{
-			while (IsAlphaNumeric(Peek(data)) || Peek(data) == '_') Advance(data);
+			while (!AtEnd(data) && (IsAlphaNumeric(Peek(data)) || Peek(data) == '_')) Advance(data);
 
 			const char* text = ParserString::Substring(data.FileContents, data.Start, data.Cursor - data.Start);
 			TokenType type = TokenType::IDENTIFIER;

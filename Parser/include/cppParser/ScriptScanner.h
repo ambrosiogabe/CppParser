@@ -12,6 +12,7 @@ namespace CppParser
 		List<Token> ScanTokens(const char* filepath, bool includeWhitespace=false);
 
 		void DebugPrint(const List<Token>& tokens, bool printLineAndCol=true, bool printWhitespace=false);
+		void WriteTokensToFile(const List<Token>& tokens, const char* filename);
 		const char* TokenName(TokenType type);
 
 		void FreeTokens(List<Token>& tokens);

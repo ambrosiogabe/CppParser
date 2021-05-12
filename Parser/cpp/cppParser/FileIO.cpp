@@ -54,5 +54,16 @@ namespace CppParser
 				FreeMem((void*)fileContents);
 			}
 		}
+
+		void DefaultWriteFile(const char* filepath, const char* fileContents)
+		{
+			FILE* filePointer;
+			filePointer = fopen(filepath, "w+");
+			if (filePointer)
+			{
+				fprintf(filePointer, "%s", fileContents);
+				fclose(filePointer);
+			}
+		}
 	}
 }

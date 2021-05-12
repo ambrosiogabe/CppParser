@@ -7,6 +7,7 @@ namespace CppParser
 	{
 		const char* DefaultReadFile(const char* filepath);
 		void DefaultFreeFile(const char* fileContents);
+		void DefaultWriteFile(const char* filepath, const char* fileContents);
 	}
 }
 

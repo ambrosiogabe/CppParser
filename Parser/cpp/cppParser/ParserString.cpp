@@ -76,7 +76,7 @@ namespace CppParser
 
 				if (newStr)
 				{
-					if (startIndex >= 0 && startIndex + size < strToCopyFromSize)
+					if (startIndex >= 0 && startIndex + size <= strToCopyFromSize)
 					{
 						memcpy(newStr, &(strToCopyFrom[startIndex]), sizeof(char) * size);
 						newStr[size] = '\0';
@@ -133,5 +133,35 @@ namespace CppParser
 				FreeMem((void*)str);
 			}
 		}
+	}
+
+	StringBuilder::StringBuilder()
+	{
+		contents = List<char>(10);
+	}
+
+	void StringBuilder::Append(const char* strToAppend)
+	{
+		const char* c = strToAppend;
+		while (*c != '\0')
+		{
+			contents.push(*c);
+			c++;
+		}
+	}
+
+	void StringBuilder::Append(char character)
+	{
+		contents.push(character);
+	}
+
+	const char* StringBuilder::c_str()
+	{
+		// This will put a '\0' nullbyte at the end of the string
+		// and then remove it from the array, but the nullbyte will
+		// still be there until another element is pushed to the stack
+		contents.push('\0');
+		contents.pop();
+		return contents.begin();
 	}
 }

@@ -86,9 +86,9 @@ namespace CppParser
 			unsigned long tokenHash = HashToken(token);
 			for (const DefineSymbol& hash : symbolTable.DefineSymbols)
 			{
-				if (hash.hash == tokenHash)
+				if (hash.hash == tokenHash && ParserString::Compare(token.m_Lexeme, hash.token.m_Lexeme))
 				{
-					return true;
+					return token.m_Line > hash.lineDefined;
 				}
 			}
 

@@ -1,123 +1,43 @@
-//#include <vector.h>
-//#include <string.h>
-//#include <stdio.h>
+#ifdef TEST_PARSER_CPP
+#define TEST_PARSER_CPP
 
-#define min(X, Y)  ((X) < (Y) ? (X) : (Y))
+#define min(X, Y) ((X) < (Y) ? (X) : (Y))
 int a = 0;
 int b = 0;
 int x = min(a, b);
 
-#define macro(something, somethingElse) something; somethingElse;
+#define macro(something, somethingElse) \
+	something;                          \
+	somethingElse;
 macro(array[x = y, x + 1]);
 
-MACRO_FUN(1, 2, 3)
-
-namespace SomeNamespace
+class TestParser
 {
-	void FakeFunction()
-	{
-		COMPLEX_DEFINE;
-	}
+public:
+	TestParser();
+	~TestParser();
+
+	void foo();
+	void fooBar();
+
+private:
+	void internalFoo();
+
+private:
+	float m_Member;
 }
 
-#undef SOME_DEFINE
+#elif (5 + 1) * 2 == 12
 
-SOME_DEFINE
-/*namespace Cocoa
+class CompletelyDifferentParser
 {
-	struct SomeStructure
-	{
-		float aFloat;
-		int anInt;
-		const char* aString;
-		const std::vector<int>& complicatedVectorRef;
-		const std::string& stringRef;
-	};
+public:
+	CompletelyDifferentParser();
+	~CompletelyDifferentParser();
+	void WoahThere();
 
-	struct Vec3
-	{
-		float x;
-		float y;
-		float z;
-	};
+private:
+	float m_DumbMember;
+};
 
-	namespace MyNamespace
-	{
-		float m_Member;
-		Vec3 m_Vector;
-
-		inline void Update(float dt)
-		{
-			float verySmallUpdate = dt;
-			m_Member += dt * m_Vector.x;
-		}
-
-		int DoSomething();
-	}
-
-	class ACoolClass
-	{
-	public:
-		ACoolClass()
-		{
-			m_Vector = new Vec3();
-			m_Vector->x = 10;
-			m_Vector->y = 12;
-			m_Vector->z = 33;
-		}
-
-		~ACoolClass()
-		{
-			delete m_Vector;
-		}
-
-		[[deprecated]]
-		void MemberDecl()
-		{
-			printf("This is a deprecated function %d\n", 10);
-		}
-
-		template<typename T>
-		T TemplateAdd(const T& a, const T& b)
-		{
-			return a + b;
-		}
-
-		void* AllocateMemory(size_t size);
-
-	private:
-		float m_Member;
-		const int* m_Member2;
-		Vec3* m_Vector;
-	};
-
-	namespace FizzBuzz
-	{
-		void DoFizzBuzz(int maxNumber)
-		{
-			for (int i = 0; i < maxNumber; i++)
-			{
-				if (i % 3 == 0)
-				{
-					printf("Fizz");
-				}
-				if (i % 5 == 0)
-				{
-					printf("Buzz");
-				}
-				printf("\n");
-			}
-		}
-
-		float Average(std::vector<int> numbers)
-		{
-			float average = 0.0f;
-			for (int num : numbers)
-			{
-				average += (float)num;
-			}
-
-			return average / (int)numbers.size();
-		}
-	}
-}*/
+#endif
