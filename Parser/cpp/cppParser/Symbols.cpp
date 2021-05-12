@@ -5,14 +5,6 @@
 
 namespace CppParser
 {
-	PPSymbolTable::~PPSymbolTable()
-	{
-		for (int i = 0; i < DefineSymbols.size(); i++)
-		{
-			ParserString::FreeString(DefineSymbols[i].token.m_Lexeme);
-		}
-	}
-
 	namespace Symbols
 	{
 		using namespace CppUtils;
@@ -161,6 +153,14 @@ namespace CppParser
 			}
 
 			return false;
+		}
+
+		void FreeSymbols(PPSymbolTable& symbols)
+		{
+			for (int i = 0; i < symbols.DefineSymbols.size(); i++)
+			{
+				ParserString::FreeString(symbols.DefineSymbols[i].token.m_Lexeme);
+			}
 		}
 
 		// ===========================================================================================

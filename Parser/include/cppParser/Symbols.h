@@ -19,9 +19,6 @@ namespace CppParser
 
 	struct PPSymbolTable
 	{
-	public:
-		~PPSymbolTable();
-
 		List<DefineSymbol> DefineSymbols;
 	};
 
@@ -35,6 +32,8 @@ namespace CppParser
 		bool IsDefined(const PPSymbolTable& symbolTable, const Token& token);
 		bool IsFunctionMacroDefine(const PPSymbolTable& symbolTable, const Token& token);
 		bool IsSymbol(const PPSymbolTable& symbolTable, const Token& token);
+
+		void FreeSymbols(PPSymbolTable& symbolTable);
 	}
 }
 

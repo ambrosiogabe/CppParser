@@ -76,6 +76,7 @@ namespace CppParser
 		{
 			FreeTree(parserData.Tree);
 			ScriptScanner::FreeTokens(parserData.Tokens);
+			Symbols::FreeSymbols(parserData.PreprocessingSymbolTable);
 		}
 
 		// =============================================================================================
