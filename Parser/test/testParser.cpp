@@ -1,45 +1,22 @@
-#ifdef TEST_PARSER_CPP
+#ifndef TEST_PARSER_CPP
 #define TEST_PARSER_CPP
 
-#define min(X, Y) ((X) < (Y) ? (X) : (Y))
-int a = 0;
-int b = 0;
-int x = min(a, b);
+// #include <vector>
 
-#define macro(something, somethingElse) \
-	something;                          \
-	somethingElse;
-macro(array[x = y, x + 1]);
-
-class TestParser
+namespace Parser
 {
-public:
-	TestParser();
-	~TestParser();
+	class Test
+	{
+	public:
+		Test();
+		~Test();
 
-	void foo();
-	void fooBar();
+		void Func();
 
-private:
-	void internalFoo();
-
-private:
-	float m_Member;
+	private:
+		float m_Member;
+		std::vector m_Vec;
+	};
 }
-
-#elif (5 + 1) * 2 == 12
-
-class CompletelyDifferentParser
-{
-public:
-	CompletelyDifferentParser();
-	~CompletelyDifferentParser();
-	void WoahThere();
-
-#ifdef _WIN32
-private:
-	float m_DumbMember;
-#endif
-};
 
 #endif

@@ -9437,6 +9437,7 @@ result->type = pType;
 			data.CurrentToken = 0;
 			ExpandIncludes(fileBeingParsed, includeDirs, data);
 			RemoveSpecialTokens(data);
+			ScriptScanner::WriteTokensToFile(data.Tokens, "out.txt");
 
 			// Expand all macros
 			data.CurrentToken = 0;
