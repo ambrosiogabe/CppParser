@@ -149,16 +149,16 @@ namespace CppParser
 			return c;
 		}
 
-		char StreamCharAt(FileStream& file, int index)
+		char StreamCharAt(const FileStream& file, int index)
 		{
 			int backupCursor = file.Cursor;
-			file.Cursor = index;
-			char c = StreamReadChar(file);
-			file.Cursor = backupCursor;
+			FileStream streamShallowCopy = file;
+			streamShallowCopy.Cursor = index;
+			char c = StreamReadChar(streamShallowCopy);
 			return c;
 		}
 
-		char StreamPeek(FileStream& file, int numBytesToPeek)
+		char StreamPeek(const FileStream& file, int numBytesToPeek)
 		{
 			if (numBytesToPeek == 0)
 			{
@@ -166,9 +166,9 @@ namespace CppParser
 			}
 
 			int backupCursor = file.Cursor;
-			file.Cursor += numBytesToPeek;
-			char c = StreamReadChar(file);
-			file.Cursor = backupCursor;
+			FileStream streamShallowCopy = file;
+			streamShallowCopy.Cursor += numBytesToPeek;
+			char c = StreamReadChar(streamShallowCopy);
 			return c;
 		}
 

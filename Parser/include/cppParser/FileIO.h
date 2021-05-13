@@ -25,10 +25,10 @@ namespace CppParser
 		FileStream OpenFileStream(const char* filepath);
 		void CloseFileStream(FileStream& file);
 		char StreamReadChar(FileStream& file);
-		char StreamCharAt(FileStream& file, int index);
-		char StreamPeek(FileStream& file, int numBytesToPeek);
+		char StreamCharAt(const FileStream& file, int index);
+		char StreamPeek(const FileStream& file, int numBytesToPeek);
 		void StreamGoTo(FileStream& file, int newCursorPosition);
-		const char* StreamSubstring(FileStream& file, int start, int size);
+		const char* StreamSubstring(const FileStream& file, int start, int size);
 		bool StreamAtEnd(const FileStream& fileStream);
 	}
 }

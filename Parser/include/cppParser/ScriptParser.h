@@ -22,6 +22,7 @@ namespace CppParser
 		int CurrentToken;
 		AstNode* Tree;
 		PPSymbolTable PreprocessingSymbolTable;
+		//ScannerData Scanner;
 	};
 
 	namespace Parser

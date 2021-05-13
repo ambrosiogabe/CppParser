@@ -26,7 +26,7 @@ namespace CppParser
 		ParserData Parse(const char* fileBeingParsed, std::vector<std::filesystem::path>& includeDirs, int osDefinitions)
 		{
 			FilesSeen.clear();
-			List<Token> tokens = ScriptScanner::ScanTokens("testParser.cpp");
+			List<Token> tokens = ScriptScanner::ScanTokens(fileBeingParsed);
 			ScriptScanner::DebugPrint(tokens);
 			ParserData data = {
 				tokens,
