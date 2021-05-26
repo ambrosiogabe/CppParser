@@ -18,11 +18,13 @@ namespace CppParser
 	// This is not a POD because of the list
 	struct ParserData
 	{
-		List<Token> Tokens;
+		//List<Token> Tokens;
 		int CurrentToken;
 		AstNode* Tree;
 		PPSymbolTable PreprocessingSymbolTable;
-		//ScannerData Scanner;
+		ScannerData Scanner;
+		FileStream PreprocessOutputStream;
+		int indentLevel = 0;
 	};
 
 	namespace Parser

@@ -37,6 +37,7 @@ namespace CppParser
 		HeaderName,
 		HeaderNameString,
 		EmptyMacro,
+		Newline,
 		All,
 	};
 
@@ -1974,6 +1975,7 @@ namespace CppParser
 	{
 		AstNode* constantExpression;
 		PreprocessingAstNode* group;
+		bool evaluation;
 	};
 
 	struct ElifGroupsNode
@@ -1986,18 +1988,21 @@ namespace CppParser
 	{
 		Token identifier;
 		PreprocessingAstNode* group;
+		bool symbolDefined;
 	};
 
 	struct IfDefGroupNode
 	{
 		Token identifier;
 		PreprocessingAstNode* group;
+		bool symbolDefined;
 	};
 
 	struct IfGroupNode
 	{
 		AstNode* constantExpression;
 		PreprocessingAstNode* group;
+		bool evaluation;
 	};
 
 	struct IfSectionNode

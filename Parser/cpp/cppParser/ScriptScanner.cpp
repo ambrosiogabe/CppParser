@@ -28,13 +28,7 @@ namespace CppParser
 		static inline char Advance(ScannerData& data)
 		{
 			char c = FileIO::StreamReadChar(data.Stream);
-			data.Column++;
 			return c;
-		}
-
-		static inline bool AtEnd(const ScannerData& data)
-		{
-			return FileIO::StreamAtEnd(data.Stream);
 		}
 
 		static inline char Peek(const ScannerData& data)
@@ -58,7 +52,6 @@ namespace CppParser
 			if (FileIO::StreamPeek(data.Stream, 0) != expected) return false;
 
 			FileIO::StreamReadChar(data.Stream);
-			data.Column++;
 			return true;
 		}
 
@@ -95,8 +88,8 @@ namespace CppParser
 		static inline Token GenerateToken(const ScannerData& data, TokenType m_Type, const char* lexeme)
 		{
 			return Token{
-				data.Line,
-				data.Column - (int)(data.Stream.Cursor - data.Start),
+				data.Stream.Line,
+				data.Stream.Column - (int)(data.Stream.Stream.Cursor - data.Start),
 				m_Type,
 				ParserString::CreateString(lexeme)
 			};
@@ -105,8 +98,8 @@ namespace CppParser
 		inline Token GenerateErrorToken(const ScannerData& data)
 		{
 			return Token{
-				data.Line,
-				data.Column - (int)(data.Stream.Cursor - data.Start),
+				data.Stream.Line,
+				data.Stream.Column - (int)(data.Stream.Stream.Cursor - data.Start),
 				TokenType::ERROR_TYPE,
 				ParserString::CreateString("")
 			};
@@ -442,17 +435,16 @@ namespace CppParser
 
 		ScannerData OpenScanner(const char* filepath)
 		{
-			FileStream stream = FileIO::OpenFileStream(filepath);
+			CountingFileStream stream = FileIO::OpenCountingFileStreamRead(filepath);
 			ScannerData data;
 			data.Stream = stream;
-			data.Line = 1;
-			data.Column = 0;
 			data.Start = 0;
+			return data;
 		}
 
 		void CloseScanner(ScannerData& scanner)
 		{
-			FileIO::CloseFileStream(scanner.Stream);
+			FileIO::CloseCountingFileStreamRead(scanner.Stream);
 		}
 
 		List<Token> ScanTokens(const char* filepath, bool includeWhitespace)
@@ -464,7 +456,6 @@ namespace CppParser
 
 			while (!AtEnd(data))
 			{
-				data.Start = data.Stream.Cursor;
 				Token token = ScanTokenInternal(data);
 				if (!includeWhitespace)
 				{
@@ -478,14 +469,14 @@ namespace CppParser
 					tokens.push(token);
 			}
 
-			tokens.push(Token{ -1, data.Column, TokenType::NEWLINE, ParserString::CreateString("\\n") });
-			tokens.push(Token{ -1, data.Column, TokenType::END_OF_FILE, ParserString::CreateString("EOF") });
+			tokens.push(Token{ -1, data.Stream.Column, TokenType::NEWLINE, ParserString::CreateString("\\n") });
+			tokens.push(Token{ -1, data.Stream.Column, TokenType::END_OF_FILE, ParserString::CreateString("EOF") });
 
 			CloseScanner(data);
 			return tokens;
 		}
 
-		Token ScanToken(ScannerData& scannerData, bool includeWhitespace = false)
+		Token ScanToken(ScannerData& scannerData, bool includeWhitespace)
 		{
 			Token token = ScanTokenInternal(scannerData);
 			while ((!includeWhitespace && (token.m_Type == TokenType::WHITESPACE || token.m_Type == TokenType::COMMENT)) || token.m_Type == TokenType::ERROR_TYPE)
@@ -501,6 +492,26 @@ namespace CppParser
 			}
 
 			return token;
+		}
+
+		TokenType PeekToken(const ScannerData& scannerData, bool includeWhitespace)
+		{
+			ScannerData shallowCopyScannerData = scannerData;
+			Token token = ScanTokenInternal(shallowCopyScannerData);
+			while ((!includeWhitespace && (token.m_Type == TokenType::WHITESPACE || token.m_Type == TokenType::COMMENT)) || token.m_Type == TokenType::ERROR_TYPE)
+			{
+				if (!includeWhitespace)
+				{
+					if (token.m_Type == TokenType::WHITESPACE || token.m_Type == TokenType::COMMENT)
+					{
+						ParserString::FreeString(token.m_Lexeme);
+					}
+				}
+				token = ScanTokenInternal(shallowCopyScannerData);
+			}
+
+			ParserString::FreeString(token.m_Lexeme);
+			return token.m_Type;
 		}
 
 		void DebugPrint(const List<Token>& tokens, bool printLineAndCol, bool printWhitespace)
@@ -537,8 +548,19 @@ namespace CppParser
 			}
 		}
 
-		static Token ScanToken(ScannerData& data)
+		static Token ScanTokenInternal(ScannerData& data)
 		{
+			data.Start = data.Stream.Stream.Cursor;
+			if (AtEnd(data))
+			{
+				Token dummy;
+				dummy.m_Type = TokenType::END_OF_FILE;
+				dummy.m_Column = -1;
+				dummy.m_Line = -1;
+				dummy.m_Lexeme = "";
+				return dummy;
+			}
+
 			char c = Advance(data);
 			switch (c)
 			{
@@ -713,11 +735,6 @@ namespace CppParser
 					while (!AtEnd(data) && !(Peek(data) == '*' && PeekNext(data) == '/'))
 					{
 						c = Advance(data);
-						if (c == '\n')
-						{
-							data.Column = 0;
-							data.Line++;
-						}
 					}
 
 					// Consume */
@@ -824,15 +841,11 @@ namespace CppParser
 			case ' ':
 			case '\r':
 				// Ignore whitespace
-				data.Column++;
 				return GenerateWhitespaceToken();
 			case '\t':
-				data.Column += 4;
 				return GenerateWhitespaceToken();
 			case '\n':
 				// Record the new line, then continue
-				data.Column = 0;
-				data.Line++;
 				if (PeekPrevious(data, 2) == '\\' || (PeekPrevious(data, 2) == '\r' && PeekPrevious(data, 3) == '\\'))
 				{
 					return GenerateWhitespaceToken();
@@ -857,7 +870,7 @@ namespace CppParser
 		{
 			while (!AtEnd(data) && (IsAlphaNumeric(Peek(data)) || Peek(data) == '_')) Advance(data);
 
-			const char* text = FileIO::StreamSubstring(data.Stream, data.Start, data.Stream.Cursor - data.Start);
+			const char* text = FileIO::StreamSubstring(data.Stream, data.Start, data.Stream.Stream.Cursor - data.Start);
 			TokenType type = TokenType::IDENTIFIER;
 			auto iter = keywords.find(text);
 			if (iter != keywords.end())
@@ -865,7 +878,7 @@ namespace CppParser
 				type = iter->second;
 			}
 
-			return Token{ data.Line, data.Column - (int)(data.Stream.Cursor - data.Start), type, text };
+			return Token{ data.Stream.Line, data.Stream.Column - (int)(data.Stream.Stream.Cursor - data.Start), type, text };
 		}
 
 		static Token Number(ScannerData& data, char firstDigit)
@@ -949,7 +962,7 @@ namespace CppParser
 
 				if (Peek(data) == '.')
 				{
-					Logger::Error("Unexpected number literal at %d col:%d", data.Line, data.Column);
+					Logger::Error("Unexpected number literal at %d col:%d", data.Stream.Line, data.Stream.Column);
 					return GenerateErrorToken(data);
 				}
 			}
@@ -971,12 +984,12 @@ namespace CppParser
 			{
 				ConsumeTrailingUnsignedLong(data);
 
-				return Token{ data.Line, data.Column - (int)(data.Stream.Cursor - data.Start), TokenType::INTEGER_LITERAL,
-					FileIO::StreamSubstring(data.Stream, data.Start, data.Stream.Cursor - data.Start) };
+				return Token{ data.Stream.Line, data.Stream.Column - (int)(data.Stream.Stream.Cursor - data.Start), TokenType::INTEGER_LITERAL,
+					FileIO::StreamSubstring(data.Stream, data.Start, data.Stream.Stream.Cursor - data.Start) };
 			}
 
-			return Token{ data.Line, data.Column - (int)(data.Stream.Cursor - data.Start), TokenType::FLOATING_POINT_LITERAL,
-				FileIO::StreamSubstring(data.Stream, data.Start, data.Stream.Cursor - data.Start) };
+			return Token{ data.Stream.Line, data.Stream.Column - (int)(data.Stream.Stream.Cursor - data.Start), TokenType::FLOATING_POINT_LITERAL,
+				FileIO::StreamSubstring(data.Stream, data.Start, data.Stream.Stream.Cursor - data.Start) };
 		}
 
 		static Token NumberHexadecimal(ScannerData& data)
@@ -984,8 +997,8 @@ namespace CppParser
 			while (IsHexDigit(Peek(data), true)) Advance(data);
 			ConsumeTrailingUnsignedLong(data);
 
-			return Token{ data.Line, data.Column - (int)(data.Stream.Cursor - data.Start), TokenType::INTEGER_LITERAL,
-				FileIO::StreamSubstring(data.Stream, data.Start, data.Stream.Cursor - data.Start) };
+			return Token{ data.Stream.Line, data.Stream.Column - (int)(data.Stream.Stream.Cursor - data.Start), TokenType::INTEGER_LITERAL,
+				FileIO::StreamSubstring(data.Stream, data.Start, data.Stream.Stream.Cursor - data.Start) };
 		}
 
 		static Token NumberBinary(ScannerData& data)
@@ -993,8 +1006,8 @@ namespace CppParser
 			while (Peek(data) == '0' || Peek(data) == '1' || Peek(data) == '\'') Advance(data);
 			ConsumeTrailingUnsignedLong(data);
 
-			return Token{ data.Line, data.Column - (int)(data.Stream.Cursor - data.Start), TokenType::INTEGER_LITERAL,
-				FileIO::StreamSubstring(data.Stream, data.Start, data.Stream.Cursor - data.Start) };
+			return Token{ data.Stream.Line, data.Stream.Column - (int)(data.Stream.Stream.Cursor - data.Start), TokenType::INTEGER_LITERAL,
+				FileIO::StreamSubstring(data.Stream, data.Start, data.Stream.Stream.Cursor - data.Start) };
 		}
 
 		static Token NumberOctal(ScannerData& data)
@@ -1002,8 +1015,8 @@ namespace CppParser
 			while (Peek(data) >= '0' && Peek(data) <= '7' || Peek(data) == '\'') Advance(data);
 			ConsumeTrailingUnsignedLong(data);
 
-			return Token{ data.Line, data.Column - (int)(data.Stream.Cursor - data.Start), TokenType::INTEGER_LITERAL,
-				FileIO::StreamSubstring(data.Stream, data.Start, data.Stream.Cursor - data.Start) };
+			return Token{ data.Stream.Line, data.Stream.Column - (int)(data.Stream.Stream.Cursor - data.Start), TokenType::INTEGER_LITERAL,
+				FileIO::StreamSubstring(data.Stream, data.Start, data.Stream.Stream.Cursor - data.Start) };
 		}
 
 		static void ConsumeTrailingUnsignedLong(ScannerData& data)
@@ -1033,9 +1046,7 @@ namespace CppParser
 			{
 				if (Peek(data) == '\n')
 				{
-					Logger::Warning("Invalid character literal encountered while scanning at line: %d:%d", data.Line, data.Column);
-					data.Line++;
-					data.Column = -1;
+					Logger::Warning("Invalid character literal encountered while scanning at line: %d:%d", data.Stream.Line, data.Stream.Column);
 					break;
 				}
 				// Skip over any escaped quotes
@@ -1054,29 +1065,29 @@ namespace CppParser
 			if (AtEnd(data))
 			{
 				// TODO: This might not need to be here
-				Logger::Warning("Unexpected character literal encountered while scanning at line %d:%d. We hit the end of the file.", data.Line, data.Column);
+				Logger::Warning("Unexpected character literal encountered while scanning at line %d:%d. We hit the end of the file.", data.Stream.Line, data.Stream.Column);
 				return GenerateErrorToken(data);
 			}
 
 			Advance(data);
 
-			return Token{ data.Line, data.Column - (int)(data.Stream.Cursor - data.Start), TokenType::CHARACTER_LITERAL,
-				FileIO::StreamSubstring(data.Stream, data.Start, data.Stream.Cursor - data.Start) };
+			return Token{ data.Stream.Line, data.Stream.Column - (int)(data.Stream.Stream.Cursor - data.Start), TokenType::CHARACTER_LITERAL,
+				FileIO::StreamSubstring(data.Stream, data.Start, data.Stream.Stream.Cursor - data.Start) };
 		}
 
 		static Token String(ScannerData& data, bool isRawStringLiteral)
 		{
 			if (isRawStringLiteral)
 			{
-				int matchStart = data.Stream.Cursor;
+				int matchStart = data.Stream.Stream.Cursor;
 				while (Peek(data) != '(')
 				{
 					Advance(data);
 				}
 				const char* strToMatch = ")";
-				if (data.Stream.Cursor > matchStart)
+				if (data.Stream.Stream.Cursor > matchStart)
 				{
-					const char* newStrToMatch = FileIO::StreamSubstring(data.Stream, matchStart, data.Stream.Cursor - matchStart);
+					const char* newStrToMatch = FileIO::StreamSubstring(data.Stream, matchStart, data.Stream.Stream.Cursor - matchStart);
 					ParserString::FreeString(strToMatch);
 					strToMatch = newStrToMatch;
 				}
@@ -1086,7 +1097,7 @@ namespace CppParser
 				{
 					if (Peek(data) == ')')
 					{
-						const char* fileSubstr = FileIO::StreamSubstring(data.Stream, data.Stream.Cursor, strToMatchLength);
+						const char* fileSubstr = FileIO::StreamSubstring(data.Stream, data.Stream.Stream.Cursor, strToMatchLength);
 						if (fileSubstr == strToMatch)
 						{
 							for (int i = 0; i < strToMatchLength; i++)
@@ -1108,18 +1119,13 @@ namespace CppParser
 
 				while (Peek(data) != '"' && !AtEnd(data))
 				{
-					if (Peek(data) == '\n')
-					{
-						data.Line++;
-						data.Column = -1;
-					}
 					Advance(data);
 				}
 			}
 
 			if (AtEnd(data))
 			{
-				Logger::Error("Unexpected string literal at %d col:%d", data.Line, data.Column);
+				Logger::Error("Unexpected string literal at %d col:%d", data.Stream.Line, data.Stream.Column);
 				return GenerateErrorToken(data);
 			}
 
@@ -1128,13 +1134,13 @@ namespace CppParser
 			if (!isRawStringLiteral)
 			{
 				// Remove thes start and end quotes
-				const char* value = FileIO::StreamSubstring(data.Stream, data.Start + (unsigned long long)1, (unsigned long long)data.Stream.Cursor - data.Start - (unsigned long long)2);
-				return Token{ data.Line, data.Column - (int)(data.Stream.Cursor - data.Start), TokenType::STRING_LITERAL, value };
+				const char* value = FileIO::StreamSubstring(data.Stream, data.Start + (unsigned long long)1, (unsigned long long)data.Stream.Stream.Cursor - data.Start - (unsigned long long)2);
+				return Token{ data.Stream.Line, data.Stream.Column - (int)(data.Stream.Stream.Cursor - data.Start), TokenType::STRING_LITERAL, value };
 			}
 			else
 			{
-				const char* value = FileIO::StreamSubstring(data.Stream, data.Start, (unsigned long long)data.Stream.Cursor - (unsigned long long)data.Start);
-				return Token{ data.Line, data.Column - (int)(data.Stream.Cursor - data.Start), TokenType::STRING_LITERAL, value };
+				const char* value = FileIO::StreamSubstring(data.Stream, data.Start, (unsigned long long)data.Stream.Stream.Cursor - (unsigned long long)data.Start);
+				return Token{ data.Stream.Line, data.Stream.Column - (int)(data.Stream.Stream.Cursor - data.Start), TokenType::STRING_LITERAL, value };
 			}
 		}
 	}

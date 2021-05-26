@@ -26,13 +26,14 @@ namespace CppParser
 		ParserData Parse(const char* fileBeingParsed, std::vector<std::filesystem::path>& includeDirs, int osDefinitions)
 		{
 			FilesSeen.clear();
-			List<Token> tokens = ScriptScanner::ScanTokens(fileBeingParsed);
-			ScriptScanner::DebugPrint(tokens);
+
+			const char* preprocessOutputPath = ParserString::Join(fileBeingParsed, ".o");
 			ParserData data = {
-				tokens,
 				0,
 				nullptr,
-				PPSymbolTable()
+				PPSymbolTable(),
+				ScriptScanner::OpenScanner(fileBeingParsed),
+				FileIO::OpenFileStreamWrite(preprocessOutputPath)
 			};
 
 			if ((osDefinitions & (int)PredefinedMacros::Android) == (int)PredefinedMacros::Android)
@@ -75,7 +76,7 @@ namespace CppParser
 		void FreeParserData(ParserData& parserData)
 		{
 			FreeTree(parserData.Tree);
-			ScriptScanner::FreeTokens(parserData.Tokens);
+			ScriptScanner::CloseScanner(parserData.Scanner);
 			Symbols::FreeSymbols(parserData.PreprocessingSymbolTable);
 		}
 
@@ -1100,18 +1101,17 @@ namespace CppParser
 		// ===============================================================================================
 		static bool AtEnd(const ParserData& data)
 		{
-			return data.CurrentToken >= data.Tokens.size();
+			return ScriptScanner::AtEnd(data.Scanner);
 		}
 
-		static void ErrorAtToken(ParserData& data)
+		static void ErrorAtToken(ParserData& data, Token& currentToken)
 		{
-			Token& currentToken = AtEnd(data) ? data.Tokens[data.Tokens.size() - 1] : data.Tokens[data.CurrentToken];
 			Logger::Error("Unexpected token '%s' at line %d:%d", ScriptScanner::TokenName(currentToken.m_Type), currentToken.m_Line, currentToken.m_Column);
 		}
 
 		static void Consume(ParserData& data, TokenType type)
 		{
-			Token& currentToken = data.Tokens[data.CurrentToken];
+			Token currentToken = ScriptScanner::ScanToken(data.Scanner);
 			if (currentToken.m_Type == type)
 			{
 				data.CurrentToken++;
@@ -1124,13 +1124,43 @@ namespace CppParser
 
 		static void BacktrackTo(ParserData& data, int position)
 		{
-			if (!(position >= 0 && position < data.Tokens.size()))
+			if (!(position >= 0 && position <= data.Scanner.Stream.Stream.Size))
 			{
 				// TODO: Remove me!
 				printf("HERE");
 			}
-			Logger::Assert(position >= 0 && position < data.Tokens.size(), "Invalid backtrack location.");
-			data.CurrentToken = position;
+
+			FileIO::StreamGoTo(data.Scanner.Stream, position);
+		}
+
+		static void Write(ParserData& data, bool writePPTokensToFile, const Token& token)
+		{
+			if (writePPTokensToFile)
+			{
+				FileIO::WriteToStream(data.PreprocessOutputStream, token.m_Lexeme);
+				if (token.m_Type == TokenType::NEWLINE)
+				{
+					for (int i = 0; i < data.indentLevel; i++)
+					{
+						FileIO::WriteToStream(data.PreprocessOutputStream, "\t");
+					}
+				}
+			}
+		}
+
+		static void Write(ParserData& data, bool writePPTokensToFile, const char* lexeme)
+		{
+			if (writePPTokensToFile)
+			{
+				FileIO::WriteToStream(data.PreprocessOutputStream, lexeme);
+				if (ParserString::Compare(lexeme, "\n"))
+				{
+					for (int i = 0; i < data.indentLevel; i++)
+					{
+						FileIO::WriteToStream(data.PreprocessOutputStream, "\t");
+					}
+				}
+			}
 		}
 
 		static bool Match(ParserData& data, TokenType type)
@@ -1139,19 +1169,23 @@ namespace CppParser
 			{
 				return false;
 			}
-			Token& currentToken = data.Tokens[data.CurrentToken];
+			int backtrackPosition = data.Scanner.Stream.Stream.Cursor;
+			Token currentToken = ScriptScanner::ScanToken(data.Scanner);
 			if (currentToken.m_Type == type)
 			{
+				// We aren't concerned with the lexeme here, so just free the result
 				data.CurrentToken++;
+				ParserString::FreeString(currentToken.m_Lexeme);
 				return true;
 			}
+			BacktrackTo(data, backtrackPosition);
 
 			return false;
 		}
 
 		static Token ConsumeCurrent(ParserData& data, TokenType type)
 		{
-			Token& currentToken = AtEnd(data) ? data.Tokens[data.Tokens.size() - 1] : data.Tokens[data.CurrentToken];
+			Token currentToken = ScriptScanner::ScanToken(data.Scanner);
 			if (currentToken.m_Type == type)
 			{
 				data.CurrentToken++;
@@ -1166,15 +1200,15 @@ namespace CppParser
 			return currentToken;
 		}
 
-		static Token GetCurrentToken(const ParserData& data)
-		{
-			return AtEnd(data) ? data.Tokens[data.Tokens.size() - 1] : data.Tokens[data.CurrentToken];
-		}
+		//static Token GetCurrentToken(const ParserData& data)
+		//{
+		//	return AtEnd(data) ? data.Tokens[data.Tokens.size() - 1] : data.Tokens[data.CurrentToken];
+		//}
 
-		static Token GetTokenAt(const ParserData& data, int index)
-		{
-			return index >= data.Tokens.size() ? data.Tokens[data.Tokens.size() - 1] : data.Tokens[index];
-		}
+		//static Token GetTokenAt(const ParserData& data, int index)
+		//{
+		//	return index >= data.Tokens.size() ? data.Tokens[data.Tokens.size() - 1] : data.Tokens[index];
+		//}
 
 		static bool IsAssignmentOperator(TokenType type)
 		{
@@ -1185,7 +1219,7 @@ namespace CppParser
 
 		static TokenType Peek(ParserData& data)
 		{
-			return AtEnd(data) ? data.Tokens[data.Tokens.size() - 1].m_Type : data.Tokens[data.CurrentToken].m_Type;
+			return ScriptScanner::PeekToken(data.Scanner);
 		}
 
 		static bool PeekIn(ParserData& data, std::initializer_list<TokenType> tokenTypes)
@@ -1201,57 +1235,52 @@ namespace CppParser
 		{
 			// This function looks for a token that matches any of the types in the initializer list
 			// before the first semicolon or eof token. If it finds it, it returns true, otherwise false
-			int token = data.CurrentToken;
-			size_t tokenTypeSize = tokenTypes.size();
+			int backtrackPosition = data.Scanner.Stream.Stream.Cursor;
+			bool res = false;
 			while (!AtEnd(data))
 			{
-				Token& iter = data.Tokens[token];
+				Token token = ScriptScanner::ScanToken(data.Scanner);
 				// NOTE: Newlines should only be visible during preprocessing. Which is important because it
 				// NOTE: basically acts the same way a semicolon does during normal parsing
-				if (iter.m_Type == TokenType::SEMICOLON || iter.m_Type == TokenType::NEWLINE)
+				if (token.m_Type == TokenType::SEMICOLON || token.m_Type == TokenType::NEWLINE)
 				{
-					return false;
+					break;
 				}
 
-				if (std::find(tokenTypes.begin(), tokenTypes.end(), iter.m_Type) != tokenTypes.end())
+				if (std::find(tokenTypes.begin(), tokenTypes.end(), token.m_Type) != tokenTypes.end())
 				{
-					return true;
-				}
-				token++;
-				if (token >= data.Tokens.size())
-				{
-					return false;
+					res = true;
+					break;
 				}
 			}
 
-			return false;
+			BacktrackTo(data, backtrackPosition);
+			return res;
 		}
 
 		static bool MatchBeforeSemicolon(ParserData& data, TokenType type1, TokenType nextType)
 		{
 			// This function looks for a token that matches any of the types in the initializer list
 			// before the first semicolon or eof token. If it finds it, it returns true, otherwise false
-			int token = data.CurrentToken;
+			int backtrackPosition = data.Scanner.Stream.Stream.Cursor;
+			bool res = false;
 			while (!AtEnd(data))
 			{
-				Token& iter = data.Tokens[token];
-				if (iter.m_Type == TokenType::SEMICOLON)
+				Token token = ScriptScanner::ScanToken(data.Scanner);
+				if (token.m_Type == TokenType::SEMICOLON)
 				{
-					return false;
+					break;
 				}
 
-				if (iter.m_Type == type1 && token < data.Tokens.size() && data.Tokens[token + 1].m_Type == nextType)
+				if (token.m_Type == type1 && Peek(data) == nextType)
 				{
-					return true;
-				}
-				token++;
-				if (token >= data.Tokens.size())
-				{
-					return false;
+					res = true;
+					break;
 				}
 			}
 
-			return false;
+			BacktrackTo(data, backtrackPosition);
+			return res;
 		}
 
 		// ===============================================================================================
@@ -3058,27 +3087,30 @@ result->type = pType;
 			return result;
 		}
 
-		static PreprocessingAstNode* GenerateIfGroupNode(AstNode* constantExpression, PreprocessingAstNode* group)
+		static PreprocessingAstNode* GenerateIfGroupNode(AstNode* constantExpression, PreprocessingAstNode* group, bool evaluation)
 		{
 			PreprocessingAstNode* result = GeneratePreprocessingAstNode(PreprocessingAstNodeType::IfGroup);
 			result->ifGroup.constantExpression = constantExpression;
 			result->ifGroup.group = group;
+			result->ifGroup.evaluation = evaluation;
 			return result;
 		}
 
-		static PreprocessingAstNode* GenerateIfDefGroupNode(Token identifier, PreprocessingAstNode* group)
+		static PreprocessingAstNode* GenerateIfDefGroupNode(Token identifier, PreprocessingAstNode* group, bool symbolDefined)
 		{
 			PreprocessingAstNode* result = GeneratePreprocessingAstNode(PreprocessingAstNodeType::IfDefGroup);
 			result->ifDefGroup.identifier = identifier;
 			result->ifDefGroup.group = group;
+			result->ifDefGroup.symbolDefined = symbolDefined;
 			return result;
 		}
 
-		static PreprocessingAstNode* GenerateIfNDefGroupNode(Token identifier, PreprocessingAstNode* group)
+		static PreprocessingAstNode* GenerateIfNDefGroupNode(Token identifier, PreprocessingAstNode* group, bool symbolDefined)
 		{
 			PreprocessingAstNode* result = GeneratePreprocessingAstNode(PreprocessingAstNodeType::IfNDefGroup);
 			result->ifNDefGroup.identifier = identifier;
 			result->ifNDefGroup.group = group;
+			result->ifNDefGroup.symbolDefined = symbolDefined;
 			return result;
 		}
 
@@ -3090,11 +3122,12 @@ result->type = pType;
 			return result;
 		}
 
-		static PreprocessingAstNode* GenerateElifGroupNode(AstNode* constantExpression, PreprocessingAstNode* group)
+		static PreprocessingAstNode* GenerateElifGroupNode(AstNode* constantExpression, PreprocessingAstNode* group, bool evaluation)
 		{
 			PreprocessingAstNode* result = GeneratePreprocessingAstNode(PreprocessingAstNodeType::ElifGroup);
 			result->elifGroup.constantExpression = constantExpression;
 			result->elifGroup.group = group;
+			result->elifGroup.evaluation = evaluation;
 			return result;
 		}
 
@@ -3246,6 +3279,12 @@ result->type = pType;
 		{
 			PreprocessingAstNode* result = GeneratePreprocessingAstNode(PreprocessingAstNodeType::PreprocessingOpOrPunc);
 			result->preprocessingOpOrPunc.opOrPunc = opOrPunc;
+			return result;
+		}
+
+		static PreprocessingAstNode* GenerateNewlineNode()
+		{
+			PreprocessingAstNode* result = GeneratePreprocessingAstNode(PreprocessingAstNodeType::Newline);
 			return result;
 		}
 
@@ -3524,34 +3563,34 @@ result->type = pType;
 
 		// Preprocessor File
 		static PreprocessingAstNode* ParsePreprocessingFile(ParserData& data);
-		static PreprocessingAstNode* ParseGroup(ParserData& data);
-		static PreprocessingAstNode* ParseGroupPart(ParserData& data);
-		static PreprocessingAstNode* ParseIfSection(ParserData& data);
-		static PreprocessingAstNode* ParseIfGroup(ParserData& data);
-		static PreprocessingAstNode* ParseElifGroups(ParserData& data);
-		static PreprocessingAstNode* ParseElifGroup(ParserData& data);
-		static PreprocessingAstNode* ParseElseGroup(ParserData& data);
-		static PreprocessingAstNode* ParseMacroInclude(ParserData& data);
-		static PreprocessingAstNode* ParseControlLine(ParserData& data);
-		static PreprocessingAstNode* ParseTextLine(ParserData& data);
-		static PreprocessingAstNode* ParseNonDirective(ParserData& data);
-		static PreprocessingAstNode* ParseIdentifierList(ParserData& data);
-		static PreprocessingAstNode* ParseReplacementList(ParserData& data);
-		static PreprocessingAstNode* ParsePPTokens(ParserData& data, bool isHeader = false);
-		static PreprocessingAstNode* ParseNumberLiteral(ParserData& data);
+		static PreprocessingAstNode* ParseGroup(ParserData& data, bool writeToPPFile);
+		static PreprocessingAstNode* ParseGroupPart(ParserData& data, bool writeToPPFile);
+		static PreprocessingAstNode* ParseIfSection(ParserData& data, bool writeToPPFile);
+		static PreprocessingAstNode* ParseIfGroup(ParserData& data, bool writeToPPFile);
+		static PreprocessingAstNode* ParseElifGroups(ParserData& data, bool writeToPPFile);
+		static PreprocessingAstNode* ParseElifGroup(ParserData& data, bool writeToPPFile);
+		static PreprocessingAstNode* ParseElseGroup(ParserData& data, bool writeToPPFile);
+		static PreprocessingAstNode* ParseMacroInclude(ParserData& data, bool writeToPPFile);
+		static PreprocessingAstNode* ParseControlLine(ParserData& data, bool writeToPPFile);
+		static PreprocessingAstNode* ParseTextLine(ParserData& data, bool writeToPPFile);
+		static PreprocessingAstNode* ParseNonDirective(ParserData& data, bool writeToPPFile);
+		static PreprocessingAstNode* ParseIdentifierList(ParserData& data, bool writeToPPFile);
+		static PreprocessingAstNode* ParseReplacementList(ParserData& data, bool writeToPPFile);
+		static PreprocessingAstNode* ParsePPTokens(ParserData& data, bool writeToPPFile, bool isHeader);
+		static PreprocessingAstNode* ParseNumberLiteral(ParserData& data, bool writeToPPFile);
 
 		// Preprocessor Stuff
-		static PreprocessingAstNode* ParsePreprocessingToken(ParserData& data, bool isHeader = false);
-		static PreprocessingAstNode* ParseHeaderName(ParserData& data);
-		static PreprocessingAstNode* ParseCharacterLiteral(ParserData& data);
-		static PreprocessingAstNode* ParseUserDefinedCharacterLiteral(ParserData& data);
-		static PreprocessingAstNode* ParseStringLiteral(ParserData& data);
-		static PreprocessingAstNode* ParseUserDefinedStringLiteral(ParserData& data);
-		static PreprocessingAstNode* ParsePreprocessingOpOrPunc(ParserData& data);
-		static PreprocessingAstNode* ParseHCharSequence(ParserData& data);
-		static PreprocessingAstNode* ParseHChar(ParserData& data);
-		static PreprocessingAstNode* ParseQCharSequence(ParserData& data);
-		static PreprocessingAstNode* ParseQChar(ParserData& data);
+		static PreprocessingAstNode* ParsePreprocessingToken(ParserData& data, bool writeToPPFile, bool isHeader);
+		static PreprocessingAstNode* ParseHeaderName(ParserData& data, bool writeToPPFile);
+		static PreprocessingAstNode* ParseCharacterLiteral(ParserData& data, bool writeToPPFile);
+		static PreprocessingAstNode* ParseUserDefinedCharacterLiteral(ParserData& data, bool writeToPPFile);
+		static PreprocessingAstNode* ParseStringLiteral(ParserData& data, bool writeToPPFile);
+		static PreprocessingAstNode* ParseUserDefinedStringLiteral(ParserData& data, bool writeToPPFile);
+		static PreprocessingAstNode* ParsePreprocessingOpOrPunc(ParserData& data, bool writeToPPFile);
+		static PreprocessingAstNode* ParseHCharSequence(ParserData& data, bool writeToPPFile);
+		static PreprocessingAstNode* ParseHChar(ParserData& data, bool writeToPPFile);
+		static PreprocessingAstNode* ParseQCharSequence(ParserData& data, bool writeToPPFile);
+		static PreprocessingAstNode* ParseQChar(ParserData& data, bool writeToPPFile);
 
 		// ===============================================================================================
 		// Parser Implementation (internal)
@@ -3562,10 +3601,10 @@ result->type = pType;
 		// Translation Unit
 		static AstNode* ParseTranslationUnit(const char* fileBeingParsed, std::vector<std::filesystem::path>& includeDirs, ParserData& data)
 		{
-			data.Tokens.insert(Token{ -1, -1, TokenType::PREPROCESSING_FILE_BEGIN, ParserString::CreateString(fileBeingParsed) }, 0);
-			data.Tokens.insert(Token{ -1, -1, TokenType::NEWLINE, ParserString::CreateString("\\n") }, 1);
-			data.Tokens.push(Token{ -1, -1, TokenType::PREPROCESSING_FILE_END, ParserString::CreateString(fileBeingParsed) });
-			data.Tokens.push(Token{ -1, -1, TokenType::NEWLINE, ParserString::CreateString("\\n") });
+			//data.Tokens.insert(Token{ -1, -1, TokenType::PREPROCESSING_FILE_BEGIN, ParserString::CreateString(fileBeingParsed) }, 0);
+			//data.Tokens.insert(Token{ -1, -1, TokenType::NEWLINE, ParserString::CreateString("\\n") }, 1);
+			//data.Tokens.push(Token{ -1, -1, TokenType::PREPROCESSING_FILE_END, ParserString::CreateString(fileBeingParsed) });
+			//data.Tokens.push(Token{ -1, -1, TokenType::NEWLINE, ParserString::CreateString("\\n") });
 			Preprocess(fileBeingParsed, includeDirs, data);
 			data.CurrentToken = 0;
 			return ParseDeclarationSequence(data);
@@ -6465,7 +6504,7 @@ result->type = pType;
 				elipsis = true;
 				if (trailingComma)
 				{
-					ErrorAtToken(data);
+					ErrorAtToken(data, ConsumeCurrent(data, Peek(data)));
 				}
 			}
 
@@ -8656,25 +8695,26 @@ result->type = pType;
 		// into the tokens being processed right now.
 		// ===============================================================================================
 		// Preprocessing Stuff
-		static void ExpandIncludes(const char* fileBeingParsed, const std::vector<std::filesystem::path>& includeDirs, ParserData& data);
-		static List<Token> GetTokensInAbsoluteFile(const std::filesystem::path& filepath, const std::vector<std::filesystem::path>& includeDirs, ParserData& data)
-		{
-			std::string filepathStr = filepath.string();
-			Logger::Info("Getting tokens from included file in '%s'", filepathStr.c_str());
+		//static void ExpandIncludes(const char* fileBeingParsed, const std::vector<std::filesystem::path>& includeDirs, ParserData& data);
+		//static void OutputTokensInAbsoluteFile(const std::filesystem::path& filepath, const std::vector<std::filesystem::path>& includeDirs, ParserData& data)
+		//{
+		//	std::string filepathStr = filepath.string();
+		//	Logger::Info("Getting tokens from included file in '%s'", filepathStr.c_str());
 
-			List<Token> tokensInFile = ScriptScanner::ScanTokens(filepathStr.c_str());
-			tokensInFile.insert(Token{ -1, -1, TokenType::PREPROCESSING_FILE_BEGIN, ParserString::CreateString(filepathStr.c_str()) }, 0);
-			tokensInFile.insert(Token{ -1, -1, TokenType::NEWLINE, ParserString::CreateString("\\n") }, 1);
-			tokensInFile.push(Token{ -1, -1, TokenType::PREPROCESSING_FILE_END, ParserString::CreateString(filepathStr.c_str()) });
-			tokensInFile.push(Token{ -1, -1, TokenType::NEWLINE, ParserString::CreateString("\\n") });
-			ParserData preprocessedData = {
-				tokensInFile,
-				0
-			};
-			ExpandIncludes(filepathStr.c_str(), includeDirs, preprocessedData);
-
-			return preprocessedData.Tokens;
-		}
+		//	//List<Token> tokensInFile = ScriptScanner::ScanTokens(filepathStr.c_str());
+		//	//tokensInFile.insert(Token{ -1, -1, TokenType::PREPROCESSING_FILE_BEGIN, ParserString::CreateString(filepathStr.c_str()) }, 0);
+		//	//tokensInFile.insert(Token{ -1, -1, TokenType::NEWLINE, ParserString::CreateString("\\n") }, 1);
+		//	//tokensInFile.push(Token{ -1, -1, TokenType::PREPROCESSING_FILE_END, ParserString::CreateString(filepathStr.c_str()) });
+		//	//tokensInFile.push(Token{ -1, -1, TokenType::NEWLINE, ParserString::CreateString("\\n") });
+		//	ParserData preprocessedData = {
+		//		0,
+		//		data.Tree,
+		//		data.PreprocessingSymbolTable,
+		//		ScriptScanner::OpenScanner(filepathStr.c_str()),
+		//		data.PreprocessOutputStream
+		//	};
+		//	ExpandIncludes(filepathStr.c_str(), includeDirs, preprocessedData);
+		//}
 
 		static std::filesystem::path SearchForFile(const std::filesystem::path& baseDir, const char* filename)
 		{
@@ -8772,695 +8812,695 @@ result->type = pType;
 			return false;
 		}
 
-		static void MergeTokensAtCurrentPosition(ParserData& data, const List<Token>& tokens)
-		{
-			if (tokens.size() > 0)
-			{
-				//auto currentPosition = data.Tokens.begin() + data.CurrentToken;
-				data.Tokens.insert(tokens.begin(), tokens.end(), data.CurrentToken);
-			}
-		}
+		//static void MergeTokensAtCurrentPosition(ParserData& data, const List<Token>& tokens)
+		//{
+		//	if (tokens.size() > 0)
+		//	{
+		//		//auto currentPosition = data.Tokens.begin() + data.CurrentToken;
+		//		data.Tokens.insert(tokens.begin(), tokens.end(), data.CurrentToken);
+		//	}
+		//}
 
-		static void PasteReplacementListHere(ParserData& data, const List<Token>& replacement, bool isFunctionMacro)
-		{
-			if (replacement.size() > 0)
-			{
-				auto currentPosition = data.Tokens.begin() + data.CurrentToken;
-				data.Tokens.insert(replacement.begin(), replacement.end(), data.CurrentToken);
-				int macroTokenLength = 0;
-				if (isFunctionMacro)
-				{
-					int tmpCursor = data.CurrentToken + replacement.size();
-					int grouping = 0;
-					Logger::Assert(tmpCursor + 1 < data.Tokens.size() && data.Tokens[tmpCursor + 1].m_Type == TokenType::LEFT_PAREN, "Invalid function macro. Must begin with a '('");
-					while (tmpCursor < data.Tokens.size())
-					{
-						if (data.Tokens[tmpCursor].m_Type == TokenType::LEFT_PAREN)
-						{
-							grouping++;
-						}
-						else if (data.Tokens[tmpCursor].m_Type == TokenType::RIGHT_PAREN)
-						{
-							grouping--;
-							if (grouping <= 0)
-							{
-								break;
-							}
-						}
-						macroTokenLength++;
-						tmpCursor++;
-					}
-				}
+		//static void PasteReplacementListHere(ParserData& data, const List<Token>& replacement, bool isFunctionMacro)
+		//{
+		//	if (replacement.size() > 0)
+		//	{
+		//		auto currentPosition = data.Tokens.begin() + data.CurrentToken;
+		//		data.Tokens.insert(replacement.begin(), replacement.end(), data.CurrentToken);
+		//		int macroTokenLength = 0;
+		//		if (isFunctionMacro)
+		//		{
+		//			int tmpCursor = data.CurrentToken + replacement.size();
+		//			int grouping = 0;
+		//			Logger::Assert(tmpCursor + 1 < data.Tokens.size() && data.Tokens[tmpCursor + 1].m_Type == TokenType::LEFT_PAREN, "Invalid function macro. Must begin with a '('");
+		//			while (tmpCursor < data.Tokens.size())
+		//			{
+		//				if (data.Tokens[tmpCursor].m_Type == TokenType::LEFT_PAREN)
+		//				{
+		//					grouping++;
+		//				}
+		//				else if (data.Tokens[tmpCursor].m_Type == TokenType::RIGHT_PAREN)
+		//				{
+		//					grouping--;
+		//					if (grouping <= 0)
+		//					{
+		//						break;
+		//					}
+		//				}
+		//				macroTokenLength++;
+		//				tmpCursor++;
+		//			}
+		//		}
 
-				// Free the strings then remove the excess tokens
-				for (int i = data.CurrentToken + replacement.size(); i <= data.CurrentToken + replacement.size() + macroTokenLength; i++)
-				{
-					ParserString::FreeString(data.Tokens[i].m_Lexeme);
-				}
-				data.Tokens.removeRange(data.CurrentToken + replacement.size(), data.CurrentToken + replacement.size() + macroTokenLength);
-			}
-		}
+		//		// Free the strings then remove the excess tokens
+		//		for (int i = data.CurrentToken + replacement.size(); i <= data.CurrentToken + replacement.size() + macroTokenLength; i++)
+		//		{
+		//			ParserString::FreeString(data.Tokens[i].m_Lexeme);
+		//		}
+		//		data.Tokens.removeRange(data.CurrentToken + replacement.size(), data.CurrentToken + replacement.size() + macroTokenLength);
+		//	}
+		//}
 
-		static int RemoveTokensAtLine(ParserData& data, int line, std::filesystem::path filepath)
-		{
-			int numTokensRemoved = 0;
-			bool lookingInFile = false;
-			for (auto tokenIter = data.Tokens.begin(); tokenIter != data.Tokens.end();)
-			{
-				if (tokenIter->m_Type == TokenType::PREPROCESSING_FILE_BEGIN && std::filesystem::path(tokenIter->m_Lexeme) == filepath)
-				{
-					lookingInFile = true;
-				}
-				if (tokenIter->m_Type == TokenType::PREPROCESSING_FILE_END && std::filesystem::path(tokenIter->m_Lexeme) == filepath)
-				{
-					// We have hit the end of this file, time to return
-					return numTokensRemoved;
-				}
+		//static int RemoveTokensAtLine(ParserData& data, int line, std::filesystem::path filepath)
+		//{
+		//	int numTokensRemoved = 0;
+		//	bool lookingInFile = false;
+		//	for (auto tokenIter = data.Tokens.begin(); tokenIter != data.Tokens.end();)
+		//	{
+		//		if (tokenIter->m_Type == TokenType::PREPROCESSING_FILE_BEGIN && std::filesystem::path(tokenIter->m_Lexeme) == filepath)
+		//		{
+		//			lookingInFile = true;
+		//		}
+		//		if (tokenIter->m_Type == TokenType::PREPROCESSING_FILE_END && std::filesystem::path(tokenIter->m_Lexeme) == filepath)
+		//		{
+		//			// We have hit the end of this file, time to return
+		//			return numTokensRemoved;
+		//		}
 
-				if (lookingInFile && tokenIter->m_Line == line)
-				{
-					ParserString::FreeString(tokenIter->m_Lexeme);
-					tokenIter = data.Tokens.removeIter(tokenIter);
-					numTokensRemoved++;
-				}
-				else
-				{
-					tokenIter++;
-				}
-			}
-			return numTokensRemoved;
-		}
+		//		if (lookingInFile && tokenIter->m_Line == line)
+		//		{
+		//			ParserString::FreeString(tokenIter->m_Lexeme);
+		//			tokenIter = data.Tokens.removeIter(tokenIter);
+		//			numTokensRemoved++;
+		//		}
+		//		else
+		//		{
+		//			tokenIter++;
+		//		}
+		//	}
+		//	return numTokensRemoved;
+		//}
 
-		static void RemoveWhitespaceTokens(ParserData& data)
-		{
-			for (auto tokenIter = data.Tokens.begin(); tokenIter != data.Tokens.end();)
-			{
-				if (tokenIter->m_Type == TokenType::WHITESPACE || tokenIter->m_Type == TokenType::NEWLINE || tokenIter->m_Type == TokenType::COMMENT)
-				{
-					ParserString::FreeString(tokenIter->m_Lexeme);
-					tokenIter = data.Tokens.removeIter(tokenIter);
-				}
-				else
-				{
-					tokenIter++;
-				}
-			}
-		}
+		//static void RemoveWhitespaceTokens(ParserData& data)
+		//{
+		//	for (auto tokenIter = data.Tokens.begin(); tokenIter != data.Tokens.end();)
+		//	{
+		//		if (tokenIter->m_Type == TokenType::WHITESPACE || tokenIter->m_Type == TokenType::NEWLINE || tokenIter->m_Type == TokenType::COMMENT)
+		//		{
+		//			ParserString::FreeString(tokenIter->m_Lexeme);
+		//			tokenIter = data.Tokens.removeIter(tokenIter);
+		//		}
+		//		else
+		//		{
+		//			tokenIter++;
+		//		}
+		//	}
+		//}
 
-		static void RemoveSpecialTokens(ParserData& data)
-		{
-			for (auto tokenIter = data.Tokens.begin(); tokenIter != data.Tokens.end();)
-			{
-				//if (tokenIter->m_Type == TokenType::PREPROCESSING_FILE_BEGIN || tokenIter->m_Type == TokenType::PREPROCESSING_FILE_END)
-				//{
-				//	ParserString::FreeString(tokenIter->m_Lexeme);
-				//	tokenIter = data.Tokens.removeIter(tokenIter);
-				//}
-				if (tokenIter->m_Type == TokenType::END_OF_FILE && tokenIter != data.Tokens.end() - 1)
-				{
-					ParserString::FreeString(tokenIter->m_Lexeme);
-					tokenIter = data.Tokens.removeIter(tokenIter);
-				}
-				else
-				{
-					tokenIter++;
-				}
-			}
-		}
+		//static void RemoveSpecialTokens(ParserData& data)
+		//{
+		//	for (auto tokenIter = data.Tokens.begin(); tokenIter != data.Tokens.end();)
+		//	{
+		//		//if (tokenIter->m_Type == TokenType::PREPROCESSING_FILE_BEGIN || tokenIter->m_Type == TokenType::PREPROCESSING_FILE_END)
+		//		//{
+		//		//	ParserString::FreeString(tokenIter->m_Lexeme);
+		//		//	tokenIter = data.Tokens.removeIter(tokenIter);
+		//		//}
+		//		if (tokenIter->m_Type == TokenType::END_OF_FILE && tokenIter != data.Tokens.end() - 1)
+		//		{
+		//			ParserString::FreeString(tokenIter->m_Lexeme);
+		//			tokenIter = data.Tokens.removeIter(tokenIter);
+		//		}
+		//		else
+		//		{
+		//			tokenIter++;
+		//		}
+		//	}
+		//}
 
-		static void walkSimpleMacroDefine(PreprocessingAstNode* node, void* userData)
-		{
-			ParserData* data = (ParserData*)userData;
-			Symbols::AddDefineSymbol(data->PreprocessingSymbolTable, node->macroDefine.identifier, node->macroDefine.identifier.m_Line, node);
-		}
+		//static void ExpandIncludes(const char* fileBeingParsed, const std::vector<std::filesystem::path>& includeDirs, ParserData& data, const char* fileToWriteTo)
+		//{
+		//	// Get all the #includes included
+		//	while (data.CurrentToken < tokensSize)
+		//	{
+		//		if (GetCurrentToken(data).m_Type == TokenType::HASHTAG)
+		//		{
+		//			PreprocessingAstNode* includeFile = ParseMacroInclude(data);
+		//			if (includeFile->success)
+		//			{
+		//				PreprocessingAstNode* ppToken = includeFile->macroInclude.ppTokens->ppTokens.preprocessingToken;
+		//				Token file;
+		//				if (ppToken->type == PreprocessingAstNodeType::HeaderName)
+		//				{
+		//					file = ppToken->headerName.identifier;
+		//				}
+		//				else
+		//				{
+		//					file = ppToken->headerNameString.stringLiteral;
+		//				}
 
-		static void walkMacroDefineFunction(PreprocessingAstNode* node, void* userData)
-		{
-			ParserData* data = (ParserData*)userData;
-			Symbols::AddDefineSymbol(data->PreprocessingSymbolTable, node->macroDefine.identifier, node->macroDefine.identifier.m_Line, node);
-		}
+		//				std::filesystem::path absFile = SearchForFile(file, fileBeingParsed, includeDirs);
+		//				if (absFile != "" && !SeenFile(absFile, FilesSeen))
+		//				{
+		//					FilesSeen.emplace_back(absFile);
+		//					MergeTokensAtCurrentPosition(data, GetTokensInAbsoluteFile(absFile, includeDirs, data));
+		//					// The size of the tokens has just grown
+		//					tokensSize = data.Tokens.size();
+		//				}
+		//				if (absFile == "")
+		//				{
+		//					Logger::Warning("Unable to find file '%s'", file.m_Lexeme);
+		//				}
+		//				data.CurrentToken -= RemoveTokensAtLine(data, file.m_Line, fileBeingParsed);
+		//				data.CurrentToken = std::max(data.CurrentToken, 0);
+		//			}
+		//			else
+		//			{
+		//				data.CurrentToken++;
+		//			}
+		//			FreePreprocessingNode(includeFile);
+		//		}
+		//		else
+		//		{
+		//			data.CurrentToken++;
+		//		}
+		//	}
+		//}
 
-		static void walkMacroUndefine(PreprocessingAstNode* node, void* userData)
-		{
-			ParserData* data = (ParserData*)userData;
-			Symbols::AddUndefine(data->PreprocessingSymbolTable, node->macroUndef.identifier, node->macroUndef.identifier.m_Line);
-		}
+		//static void walkSimpleMacroDefine(PreprocessingAstNode* node, void* userData)
+		//{
+		//	ParserData* data = (ParserData*)userData;
+		//	Symbols::AddDefineSymbol(data->PreprocessingSymbolTable, node->macroDefine.identifier, node->macroDefine.identifier.m_Line, node);
+		//}
 
-		static void ExpandIncludes(const char* fileBeingParsed, const std::vector<std::filesystem::path>& includeDirs, ParserData& data)
-		{
-			int tokensSize = data.Tokens.size();
+		//static void walkMacroDefineFunction(PreprocessingAstNode* node, void* userData)
+		//{
+		//	ParserData* data = (ParserData*)userData;
+		//	Symbols::AddDefineSymbol(data->PreprocessingSymbolTable, node->macroDefine.identifier, node->macroDefine.identifier.m_Line, node);
+		//}
 
-			// Get all the #includes included
-			while (data.CurrentToken < tokensSize)
-			{
-				if (GetCurrentToken(data).m_Type == TokenType::HASHTAG)
-				{
-					PreprocessingAstNode* includeFile = ParseMacroInclude(data);
-					if (includeFile->success)
-					{
-						PreprocessingAstNode* ppToken = includeFile->macroInclude.ppTokens->ppTokens.preprocessingToken;
-						Token file;
-						if (ppToken->type == PreprocessingAstNodeType::HeaderName)
-						{
-							file = ppToken->headerName.identifier;
-						}
-						else
-						{
-							file = ppToken->headerNameString.stringLiteral;
-						}
+		//static void walkMacroUndefine(PreprocessingAstNode* node, void* userData)
+		//{
+		//	ParserData* data = (ParserData*)userData;
+		//	Symbols::AddUndefine(data->PreprocessingSymbolTable, node->macroUndef.identifier, node->macroUndef.identifier.m_Line);
+		//}
 
-						std::filesystem::path absFile = SearchForFile(file, fileBeingParsed, includeDirs);
-						if (absFile != "" && !SeenFile(absFile, FilesSeen))
-						{
-							FilesSeen.emplace_back(absFile);
-							MergeTokensAtCurrentPosition(data, GetTokensInAbsoluteFile(absFile, includeDirs, data));
-							// The size of the tokens has just grown
-							tokensSize = data.Tokens.size();
-						}
-						if (absFile == "")
-						{
-							Logger::Warning("Unable to find file '%s'", file.m_Lexeme);
-						}
-						data.CurrentToken -= RemoveTokensAtLine(data, file.m_Line, fileBeingParsed);
-						data.CurrentToken = std::max(data.CurrentToken, 0);
-					}
-					else
-					{
-						data.CurrentToken++;
-					}
-					FreePreprocessingNode(includeFile);
-				}
-				else
-				{
-					data.CurrentToken++;
-				}
-			}
-		}
+		//static void ExpandDefineMacros(ParserData& data, PreprocessingAstNode* preprocessedTree)
+		//{
+		//	WalkPreprocessingTree(preprocessedTree, &data, walkSimpleMacroDefine, PreprocessingAstNodeType::MacroDefine, false);
+		//	WalkPreprocessingTree(preprocessedTree, &data, walkMacroDefineFunction, PreprocessingAstNodeType::MacroDefineFunction, false);
+		//	WalkPreprocessingTree(preprocessedTree, &data, walkMacroUndefine, PreprocessingAstNodeType::MacroUndef, false);
 
-		static void ExpandDefineMacros(ParserData& data, PreprocessingAstNode* preprocessedTree)
-		{
-			WalkPreprocessingTree(preprocessedTree, &data, walkSimpleMacroDefine, PreprocessingAstNodeType::MacroDefine, false);
-			WalkPreprocessingTree(preprocessedTree, &data, walkMacroDefineFunction, PreprocessingAstNodeType::MacroDefineFunction, false);
-			WalkPreprocessingTree(preprocessedTree, &data, walkMacroUndefine, PreprocessingAstNodeType::MacroUndef, false);
+		//	data.CurrentToken = 0;
+		//	while (data.CurrentToken < data.Tokens.size())
+		//	{
+		//		Token& token = GetCurrentToken(data);
+		//		if (GetCurrentToken(data).m_Type == TokenType::HASHTAG)
+		//		{
+		//			data.CurrentToken++;
+		//			// Skip all #define lines and #undef lines, that way we don't expand the macro early
+		//			if (GetCurrentToken(data).m_Type == TokenType::IDENTIFIER &&
+		//				(ParserString::Compare(GetCurrentToken(data).m_Lexeme, "undef") || ParserString::Compare(GetCurrentToken(data).m_Lexeme, "define")))
+		//			{
+		//				int currentLine = token.m_Line;
+		//				while (!AtEnd(data) && GetCurrentToken(data).m_Line == currentLine)
+		//				{
+		//					data.CurrentToken++;
+		//				}
+		//			}
+		//		}
+		//		else if (GetCurrentToken(data).m_Type == TokenType::IDENTIFIER && Symbols::IsSymbol(data.PreprocessingSymbolTable, token))
+		//		{
+		//			List<Token> replacement = Symbols::ExpandMacro(data.PreprocessingSymbolTable, data.CurrentToken, data.Tokens);
+		//			if (replacement.size() > 0)
+		//			{
+		//				PasteReplacementListHere(data, replacement, Symbols::IsFunctionMacroDefine(data.PreprocessingSymbolTable, token));
+		//			}
+		//			else
+		//			{
+		//				data.CurrentToken++;
+		//			}
+		//		}
+		//		else
+		//		{
+		//			data.CurrentToken++;
+		//		}
+		//	}
+		//}
 
-			data.CurrentToken = 0;
-			while (data.CurrentToken < data.Tokens.size())
-			{
-				Token& token = GetCurrentToken(data);
-				if (GetCurrentToken(data).m_Type == TokenType::HASHTAG)
-				{
-					data.CurrentToken++;
-					// Skip all #define lines and #undef lines, that way we don't expand the macro early
-					if (GetCurrentToken(data).m_Type == TokenType::IDENTIFIER &&
-						(ParserString::Compare(GetCurrentToken(data).m_Lexeme, "undef") || ParserString::Compare(GetCurrentToken(data).m_Lexeme, "define")))
-					{
-						int currentLine = token.m_Line;
-						while (!AtEnd(data) && GetCurrentToken(data).m_Line == currentLine)
-						{
-							data.CurrentToken++;
-						}
-					}
-				}
-				else if (GetCurrentToken(data).m_Type == TokenType::IDENTIFIER && Symbols::IsSymbol(data.PreprocessingSymbolTable, token))
-				{
-					List<Token> replacement = Symbols::ExpandMacro(data.PreprocessingSymbolTable, data.CurrentToken, data.Tokens);
-					if (replacement.size() > 0)
-					{
-						PasteReplacementListHere(data, replacement, Symbols::IsFunctionMacroDefine(data.PreprocessingSymbolTable, token));
-					}
-					else
-					{
-						data.CurrentToken++;
-					}
-				}
-				else
-				{
-					data.CurrentToken++;
-				}
-			}
-		}
+		//enum class PreprocessIfBlockType
+		//{
+		//	None,
+		//	IfDef,
+		//	IfNDef,
+		//	If,
+		//	Else,
+		//	Elif,
+		//	Endif
+		//};
 
-		enum class PreprocessIfBlockType
-		{
-			None,
-			IfDef,
-			IfNDef,
-			If,
-			Else,
-			Elif,
-			Endif
-		};
+		//struct PreprocessIfBlockDTO
+		//{
+		//	PreprocessIfBlockType type;
+		//	int tokenPosition;
+		//};
 
-		struct PreprocessIfBlockDTO
-		{
-			PreprocessIfBlockType type;
-			int tokenPosition;
-		};
+		//static PreprocessIfBlockDTO FindIfBlockStart(const ParserData& data, int startingFrom)
+		//{
+		//	int tmpCursor = startingFrom;
+		//	while (tmpCursor < data.Tokens.size())
+		//	{
+		//		Token token = GetTokenAt(data, tmpCursor);
+		//		int macroBegin = tmpCursor;
+		//		if (GetTokenAt(data, tmpCursor).m_Type == TokenType::HASHTAG)
+		//		{
+		//			tmpCursor++;
+		//			Token identifier = GetTokenAt(data, tmpCursor);
+		//			if (identifier.m_Type == TokenType::IDENTIFIER)
+		//			{
+		//				if (ParserString::Compare(identifier.m_Lexeme, "ifdef"))
+		//				{
+		//					return { PreprocessIfBlockType::IfDef, macroBegin };
+		//				}
+		//				else if (ParserString::Compare(identifier.m_Lexeme, "ifndef"))
+		//				{
+		//					return { PreprocessIfBlockType::IfNDef, macroBegin };
+		//				}
+		//			}
 
-		static PreprocessIfBlockDTO FindIfBlockStart(const ParserData& data, int startingFrom)
-		{
-			int tmpCursor = startingFrom;
-			while (tmpCursor < data.Tokens.size())
-			{
-				Token token = GetTokenAt(data, tmpCursor);
-				int macroBegin = tmpCursor;
-				if (GetTokenAt(data, tmpCursor).m_Type == TokenType::HASHTAG)
-				{
-					tmpCursor++;
-					Token identifier = GetTokenAt(data, tmpCursor);
-					if (identifier.m_Type == TokenType::IDENTIFIER)
-					{
-						if (ParserString::Compare(identifier.m_Lexeme, "ifdef"))
-						{
-							return { PreprocessIfBlockType::IfDef, macroBegin };
-						}
-						else if (ParserString::Compare(identifier.m_Lexeme, "ifndef"))
-						{
-							return { PreprocessIfBlockType::IfNDef, macroBegin };
-						}
-					}
+		//			if (GetTokenAt(data, tmpCursor).m_Type == TokenType::KW_IF)
+		//			{
+		//				return { PreprocessIfBlockType::If, macroBegin };
+		//			}
+		//		}
+		//		tmpCursor++;
+		//	}
 
-					if (GetTokenAt(data, tmpCursor).m_Type == TokenType::KW_IF)
-					{
-						return { PreprocessIfBlockType::If, macroBegin };
-					}
-				}
-				tmpCursor++;
-			}
+		//	return { PreprocessIfBlockType::None, -1 };
+		//}
 
-			return { PreprocessIfBlockType::None, -1 };
-		}
+		//static int FindIfBlockEnd(const ParserData& data, int startingFrom)
+		//{
+		//	int tmpCursor = data.CurrentToken;
+		//	int level = 0;
+		//	while (tmpCursor < data.Tokens.size())
+		//	{
+		//		Token token = GetCurrentToken(data);
+		//		if (GetTokenAt(data, tmpCursor).m_Type == TokenType::HASHTAG)
+		//		{
+		//			tmpCursor++;
+		//			Token identifier = GetTokenAt(data, tmpCursor);
+		//			if (identifier.m_Type == TokenType::IDENTIFIER)
+		//			{
+		//				if (ParserString::Compare(identifier.m_Lexeme, "endif"))
+		//				{
+		//					level--;
+		//					if (level <= 0)
+		//					{
+		//						return tmpCursor;
+		//					}
+		//				}
+		//				else if (ParserString::Compare(identifier.m_Lexeme, "ifdef") || ParserString::Compare(identifier.m_Lexeme, "ifndef"))
+		//				{
+		//					level++;
+		//				}
+		//			}
+		//			else if (identifier.m_Type == TokenType::KW_IF)
+		//			{
+		//				level++;
+		//			}
+		//		}
+		//		tmpCursor++;
+		//	}
 
-		static int FindIfBlockEnd(const ParserData& data, int startingFrom)
-		{
-			int tmpCursor = data.CurrentToken;
-			int level = 0;
-			while (tmpCursor < data.Tokens.size())
-			{
-				Token token = GetCurrentToken(data);
-				if (GetTokenAt(data, tmpCursor).m_Type == TokenType::HASHTAG)
-				{
-					tmpCursor++;
-					Token identifier = GetTokenAt(data, tmpCursor);
-					if (identifier.m_Type == TokenType::IDENTIFIER)
-					{
-						if (ParserString::Compare(identifier.m_Lexeme, "endif"))
-						{
-							level--;
-							if (level <= 0)
-							{
-								return tmpCursor;
-							}
-						}
-						else if (ParserString::Compare(identifier.m_Lexeme, "ifdef") || ParserString::Compare(identifier.m_Lexeme, "ifndef"))
-						{
-							level++;
-						}
-					}
-					else if (identifier.m_Type == TokenType::KW_IF)
-					{
-						level++;
-					}
-				}
-				tmpCursor++;
-			}
+		//	return -1;
+		//}
 
-			return -1;
-		}
+		//static PreprocessIfBlockDTO FindNextElifBlock(const ParserData& data)
+		//{
+		//	int tmpCursor = data.CurrentToken;
+		//	int level = 0;
+		//	while (tmpCursor < data.Tokens.size())
+		//	{
+		//		Token token = GetCurrentToken(data);
+		//		if (GetTokenAt(data, tmpCursor).m_Type == TokenType::HASHTAG)
+		//		{
+		//			tmpCursor++;
+		//			Token identifier = GetTokenAt(data, tmpCursor);
+		//			if (identifier.m_Type == TokenType::IDENTIFIER)
+		//			{
+		//				if (ParserString::Compare(identifier.m_Lexeme, "endif"))
+		//				{
+		//					if (level <= 0)
+		//					{
+		//						return { PreprocessIfBlockType::Endif, tmpCursor };
+		//					}
+		//					level--;
+		//				}
+		//				else if (ParserString::Compare(identifier.m_Lexeme, "elif"))
+		//				{
+		//					if (level <= 0)
+		//					{
+		//						return { PreprocessIfBlockType::Elif, tmpCursor };
+		//					}
+		//				}
+		//				else if (ParserString::Compare(identifier.m_Lexeme, "ifdef") || ParserString::Compare(identifier.m_Lexeme, "ifndef"))
+		//				{
+		//					level++;
+		//				}
+		//			}
+		//			else if (identifier.m_Type == TokenType::KW_ELSE)
+		//			{
+		//				return { PreprocessIfBlockType::Else, tmpCursor };
+		//			}
+		//			else if (identifier.m_Type == TokenType::KW_IF)
+		//			{
+		//				level++;
+		//			}
+		//		}
+		//		tmpCursor++;
+		//	}
 
-		static PreprocessIfBlockDTO FindNextElifBlock(const ParserData& data)
-		{
-			int tmpCursor = data.CurrentToken;
-			int level = 0;
-			while (tmpCursor < data.Tokens.size())
-			{
-				Token token = GetCurrentToken(data);
-				if (GetTokenAt(data, tmpCursor).m_Type == TokenType::HASHTAG)
-				{
-					tmpCursor++;
-					Token identifier = GetTokenAt(data, tmpCursor);
-					if (identifier.m_Type == TokenType::IDENTIFIER)
-					{
-						if (ParserString::Compare(identifier.m_Lexeme, "endif"))
-						{
-							if (level <= 0)
-							{
-								return { PreprocessIfBlockType::Endif, tmpCursor };
-							}
-							level--;
-						}
-						else if (ParserString::Compare(identifier.m_Lexeme, "elif"))
-						{
-							if (level <= 0)
-							{
-								return { PreprocessIfBlockType::Elif, tmpCursor };
-							}
-						}
-						else if (ParserString::Compare(identifier.m_Lexeme, "ifdef") || ParserString::Compare(identifier.m_Lexeme, "ifndef"))
-						{
-							level++;
-						}
-					}
-					else if (identifier.m_Type == TokenType::KW_ELSE)
-					{
-						return { PreprocessIfBlockType::Else, tmpCursor };
-					}
-					else if (identifier.m_Type == TokenType::KW_IF)
-					{
-						level++;
-					}
-				}
-				tmpCursor++;
-			}
+		//	return { PreprocessIfBlockType::None, -1 };
+		//}
 
-			return { PreprocessIfBlockType::None, -1 };
-		}
+		//static int FindNewlineFrom(const ParserData& data)
+		//{
+		//	int tmpCursor = data.CurrentToken;
+		//	while (tmpCursor < data.Tokens.size())
+		//	{
+		//		Token token = GetCurrentToken(data);
+		//		if (GetTokenAt(data, tmpCursor).m_Type == TokenType::NEWLINE)
+		//		{
+		//			return tmpCursor;
+		//		}
+		//		tmpCursor++;
+		//	}
 
-		static int FindNewlineFrom(const ParserData& data)
-		{
-			int tmpCursor = data.CurrentToken;
-			while (tmpCursor < data.Tokens.size())
-			{
-				Token token = GetCurrentToken(data);
-				if (GetTokenAt(data, tmpCursor).m_Type == TokenType::NEWLINE)
-				{
-					return tmpCursor;
-				}
-				tmpCursor++;
-			}
+		//	return -1;
+		//}
 
-			return -1;
-		}
+		//static int EvaluateBooleanConstantExpression(AstNode* tree);
+		//static int EvaluateBooleanLiteralExpression(AstNode* tree)
+		//{
+		//	switch (tree->literalNode.token.m_Type)
+		//	{
+		//	case TokenType::STRING_LITERAL:
+		//		Logger::Error("No string literals allowed in preprocessor constant expressions.");
+		//		return 0;
+		//	case TokenType::CHARACTER_LITERAL:
+		//		return (int)tree->literalNode.token.m_Lexeme[0];
+		//	case TokenType::INTEGER_LITERAL:
+		//		return atoi(tree->literalNode.token.m_Lexeme);
+		//	case TokenType::FLOATING_POINT_LITERAL:
+		//		Logger::Error("No floating point literals allowed in preprocessor constant expression. Must be of integral type.");
+		//		return 0;
+		//	case TokenType::KW_TRUE:
+		//		return true;
+		//	case TokenType::KW_FALSE:
+		//		return false;
+		//	}
 
-		static int EvaluateBooleanConstantExpression(AstNode* tree);
-		static int EvaluateBooleanLiteralExpression(AstNode* tree)
-		{
-			switch (tree->literalNode.token.m_Type)
-			{
-			case TokenType::STRING_LITERAL:
-				Logger::Error("No string literals allowed in preprocessor constant expressions.");
-				return 0;
-			case TokenType::CHARACTER_LITERAL:
-				return (int)tree->literalNode.token.m_Lexeme[0];
-			case TokenType::INTEGER_LITERAL:
-				return atoi(tree->literalNode.token.m_Lexeme);
-			case TokenType::FLOATING_POINT_LITERAL:
-				Logger::Error("No floating point literals allowed in preprocessor constant expression. Must be of integral type.");
-				return 0;
-			case TokenType::KW_TRUE:
-				return true;
-			case TokenType::KW_FALSE:
-				return false;
-			}
+		//	Logger::Warning("Unknown literal type while evaluating preprocessor constant expression.");
+		//	return 0;
+		//}
 
-			Logger::Warning("Unknown literal type while evaluating preprocessor constant expression.");
-			return 0;
-		}
+		//static int EvaluateBooleanBinaryExpression(AstNode* tree)
+		//{
+		//	int left = EvaluateBooleanConstantExpression(tree->binaryExpression.left);
+		//	int right = EvaluateBooleanConstantExpression(tree->binaryExpression.right);
+		//	switch (tree->binaryExpression.opType)
+		//	{
+		//	case OverloadableOperatorType::BitAnd:
+		//		return left & right;
+		//	case OverloadableOperatorType::BitOr:
+		//		return left | right;
+		//	case OverloadableOperatorType::Divide:
+		//		return left / right;
+		//	case OverloadableOperatorType::EqualEqual:
+		//		return left == right;
+		//	case OverloadableOperatorType::GreaterThan:
+		//		return left > right;
+		//	case OverloadableOperatorType::GreaterThanEqual:
+		//		return left >= right;
+		//	case OverloadableOperatorType::LeftShift:
+		//		return left << right;
+		//	case OverloadableOperatorType::LessThan:
+		//		return left < right;
+		//	case OverloadableOperatorType::LessThanEqual:
+		//		return left <= right;
+		//	case OverloadableOperatorType::LogicAnd:
+		//		return left && right;
+		//	case OverloadableOperatorType::LogicOr:
+		//		return left || right;
+		//	case OverloadableOperatorType::Minus:
+		//		return left - right;
+		//	case OverloadableOperatorType::Modulo:
+		//		return left % right;
+		//	case OverloadableOperatorType::Multiply:
+		//		return left * right;
+		//	case OverloadableOperatorType::NotEqual:
+		//		return left != right;
+		//	case OverloadableOperatorType::Plus:
+		//		return left + right;
+		//	case OverloadableOperatorType::RightShift:
+		//		return left >> right;
+		//	case OverloadableOperatorType::Xor:
+		//		return left ^ right;
+		//	}
 
-		static int EvaluateBooleanBinaryExpression(AstNode* tree)
-		{
-			int left = EvaluateBooleanConstantExpression(tree->binaryExpression.left);
-			int right = EvaluateBooleanConstantExpression(tree->binaryExpression.right);
-			switch (tree->binaryExpression.opType)
-			{
-			case OverloadableOperatorType::BitAnd:
-				return left & right;
-			case OverloadableOperatorType::BitOr:
-				return left | right;
-			case OverloadableOperatorType::Divide:
-				return left / right;
-			case OverloadableOperatorType::EqualEqual:
-				return left == right;
-			case OverloadableOperatorType::GreaterThan:
-				return left > right;
-			case OverloadableOperatorType::GreaterThanEqual:
-				return left >= right;
-			case OverloadableOperatorType::LeftShift:
-				return left << right;
-			case OverloadableOperatorType::LessThan:
-				return left < right;
-			case OverloadableOperatorType::LessThanEqual:
-				return left <= right;
-			case OverloadableOperatorType::LogicAnd:
-				return left && right;
-			case OverloadableOperatorType::LogicOr:
-				return left || right;
-			case OverloadableOperatorType::Minus:
-				return left - right;
-			case OverloadableOperatorType::Modulo:
-				return left % right;
-			case OverloadableOperatorType::Multiply:
-				return left * right;
-			case OverloadableOperatorType::NotEqual:
-				return left != right;
-			case OverloadableOperatorType::Plus:
-				return left + right;
-			case OverloadableOperatorType::RightShift:
-				return left >> right;
-			case OverloadableOperatorType::Xor:
-				return left ^ right;
-			}
+		//	Logger::Warning("Unknown constant binary expression type.");
+		//	return 0;
+		//}
 
-			Logger::Warning("Unknown constant binary expression type.");
-			return 0;
-		}
+		//static int EvaluateBooleanUnaryExpression(AstNode* tree)
+		//{
+		//	int evaluation = EvaluateBooleanConstantExpression(tree->unaryExpression.expression);
+		//	switch (tree->unaryExpression.opType)
+		//	{
+		//	case OverloadableOperatorType::PlusPlus:
+		//		return ++evaluation;
+		//	case OverloadableOperatorType::MinusMinus:
+		//		return --evaluation;
+		//	case OverloadableOperatorType::Plus:
+		//		return +evaluation;
+		//	case OverloadableOperatorType::Minus:
+		//		return -evaluation;
+		//	case OverloadableOperatorType::Not:
+		//		return !(evaluation);
+		//	case OverloadableOperatorType::BitComplement:
+		//		return ~evaluation;
+		//	}
 
-		static int EvaluateBooleanUnaryExpression(AstNode* tree)
-		{
-			int evaluation = EvaluateBooleanConstantExpression(tree->unaryExpression.expression);
-			switch (tree->unaryExpression.opType)
-			{
-			case OverloadableOperatorType::PlusPlus:
-				return ++evaluation;
-			case OverloadableOperatorType::MinusMinus:
-				return --evaluation;
-			case OverloadableOperatorType::Plus:
-				return +evaluation;
-			case OverloadableOperatorType::Minus:
-				return -evaluation;
-			case OverloadableOperatorType::Not:
-				return !(evaluation);
-			case OverloadableOperatorType::BitComplement:
-				return ~evaluation;
-			}
+		//	Logger::Warning("Unknown unary expression type.");
+		//	return 0;
+		//}
 
-			Logger::Warning("Unknown unary expression type.");
-			return 0;
-		}
+		//static int EvaluatePostfixSimpleTypeExpressionList(AstNode* tree)
+		//{
+		//	tree->postfixSimpleTypeExpressionList.simpleTypeSpecifier->simpleTypeSpec.typeName->className.identifier;
+		//	if (tree->postfixSimpleTypeExpressionList.simpleTypeSpecifier->type == AstNodeType::SimpleTypeSpec)
+		//	{
+		//		AstNode* simpleTypeSpec = tree->postfixSimpleTypeExpressionList.simpleTypeSpecifier;
+		//		if (simpleTypeSpec->simpleTypeSpec.typeName->type == AstNodeType::ClassName)
+		//		{
+		//			AstNode* className = simpleTypeSpec->simpleTypeSpec.typeName;
+		//			if (ParserString::Compare(className->className.identifier.m_Lexeme, "defined"))
+		//			{
 
-		static int EvaluatePostfixSimpleTypeExpressionList(AstNode* tree)
-		{
-			tree->postfixSimpleTypeExpressionList.simpleTypeSpecifier->simpleTypeSpec.typeName->className.identifier;
-			if (tree->postfixSimpleTypeExpressionList.simpleTypeSpecifier->type == AstNodeType::SimpleTypeSpec)
-			{
-				AstNode* simpleTypeSpec = tree->postfixSimpleTypeExpressionList.simpleTypeSpecifier;
-				if (simpleTypeSpec->simpleTypeSpec.typeName->type == AstNodeType::ClassName)
-				{
-					AstNode* className = simpleTypeSpec->simpleTypeSpec.typeName;
-					if (ParserString::Compare(className->className.identifier.m_Lexeme, "defined"))
-					{
+		//			}
+		//		}
+		//	}
 
-					}
-				}
-			}
+		//	// TODO: Implement me...
+		//	return 0;
+		//}
 
-			// TODO: Implement me...
-			return 0;
-		}
+		//static int EvaluateBooleanTernaryExpression(AstNode* tree)
+		//{
+		//	// TODO: Implement me
+		//	return 0;
+		//}
 
-		static int EvaluateBooleanTernaryExpression(AstNode* tree)
-		{
-			// TODO: Implement me
-			return 0;
-		}
+		//static int EvaluateBooleanConstantExpression(AstNode* tree)
+		//{
+		//	switch (tree->type)
+		//	{
+		//	case AstNodeType::TernaryExpression:
+		//		return EvaluateBooleanTernaryExpression(tree);
+		//	case AstNodeType::BinaryExpression:
+		//		return EvaluateBooleanBinaryExpression(tree);
+		//	case AstNodeType::UnaryExpression:
+		//		return EvaluateBooleanUnaryExpression(tree);
+		//	case AstNodeType::PostfixSimpleTypeExpressionList:
+		//		return EvaluatePostfixSimpleTypeExpressionList(tree);
+		//	case AstNodeType::Literal:
+		//		return EvaluateBooleanLiteralExpression(tree);
+		//	case AstNodeType::Grouping:
+		//		return EvaluateBooleanConstantExpression(tree->grouping.expression);
+		//	}
 
-		static int EvaluateBooleanConstantExpression(AstNode* tree)
-		{
-			switch (tree->type)
-			{
-			case AstNodeType::TernaryExpression:
-				return EvaluateBooleanTernaryExpression(tree);
-			case AstNodeType::BinaryExpression:
-				return EvaluateBooleanBinaryExpression(tree);
-			case AstNodeType::UnaryExpression:
-				return EvaluateBooleanUnaryExpression(tree);
-			case AstNodeType::PostfixSimpleTypeExpressionList:
-				return EvaluatePostfixSimpleTypeExpressionList(tree);
-			case AstNodeType::Literal:
-				return EvaluateBooleanLiteralExpression(tree);
-			case AstNodeType::Grouping:
-				return EvaluateBooleanConstantExpression(tree->grouping.expression);
-			}
+		//	Logger::Warning("Unknown constant expression type.");
+		//	return 0;
+		//}
 
-			Logger::Warning("Unknown constant expression type.");
-			return 0;
-		}
+		//static bool EvaluateConstantPreprocessorExpression(ParserData& data)
+		//{
+		//	AstNode* expression = ParseConstantExpression(data);
+		//	Logger::Assert(expression->type == AstNodeType::ConstantExpression, "#if or #elif must be followed by a constant expression.");
+		//	int evaluation = EvaluateBooleanConstantExpression(expression->constantExpression.expression);
+		//	FreeNode(expression);
+		//	return evaluation;
+		//}
 
-		static bool EvaluateConstantPreprocessorExpression(ParserData& data)
-		{
-			AstNode* expression = ParseConstantExpression(data);
-			Logger::Assert(expression->type == AstNodeType::ConstantExpression, "#if or #elif must be followed by a constant expression.");
-			int evaluation = EvaluateBooleanConstantExpression(expression->constantExpression.expression);
-			FreeNode(expression);
-			return evaluation;
-		}
+		//static void CheckIfDefineBlocks(ParserData& data, PreprocessingAstNode* preprocessedTree)
+		//{
+		//	PreprocessIfBlockDTO ifBlockStart = FindIfBlockStart(data, 0);
+		//	while (ifBlockStart.tokenPosition >= 0)
+		//	{
+		//		int ifBlockEnd = FindIfBlockEnd(data, ifBlockStart.tokenPosition);
+		//		if (ifBlockEnd == -1)
+		//		{
+		//			Logger::Error("Invalid to #if-#endif type block. Must have an #endif for every #if, #ifdef, #ifndef");
+		//			return;
+		//		}
 
-		static void CheckIfDefineBlocks(ParserData& data, PreprocessingAstNode* preprocessedTree)
-		{
-			PreprocessIfBlockDTO ifBlockStart = FindIfBlockStart(data, 0);
-			while (ifBlockStart.tokenPosition >= 0)
-			{
-				int ifBlockEnd = FindIfBlockEnd(data, ifBlockStart.tokenPosition);
-				if (ifBlockEnd == -1)
-				{
-					Logger::Error("Invalid to #if-#endif type block. Must have an #endif for every #if, #ifdef, #ifndef");
-					return;
-				}
+		//		data.CurrentToken = ifBlockStart.tokenPosition;
+		//		int ifBlockBegin = data.CurrentToken;
+		//		Consume(data, TokenType::HASHTAG);
+		//		Consume(data, Peek(data));
+		//		int keepMeStart = -1;
+		//		int keepMeEnd = -1;
+		//		if (ifBlockStart.type == PreprocessIfBlockType::IfDef || ifBlockStart.type == PreprocessIfBlockType::IfNDef)
+		//		{
+		//			Logger::Info("We are inside an ifdef or ifndef block");
+		//			Token& symbol = ConsumeCurrent(data, TokenType::IDENTIFIER);
+		//			bool symbolDefined = Symbols::IsDefined(data.PreprocessingSymbolTable, symbol);
+		//			if (symbolDefined && ifBlockStart.type == PreprocessIfBlockType::IfDef)
+		//			{
+		//				// If the symbol is defined and we are in an ifdef block, this is the section we want to keep
+		//				keepMeStart = data.CurrentToken;
+		//				keepMeEnd = FindNextElifBlock(data).tokenPosition - 2;
+		//			}
+		//			else if (!symbolDefined && ifBlockStart.type == PreprocessIfBlockType::IfNDef)
+		//			{
+		//				keepMeStart = data.CurrentToken;
+		//				keepMeEnd = FindNextElifBlock(data).tokenPosition - 2;
+		//			}
+		//		}
+		//		else if (ifBlockStart.type == PreprocessIfBlockType::If)
+		//		{
+		//			bool evaluation = EvaluateConstantPreprocessorExpression(data);
+		//			keepMeStart = FindNewlineFrom(data);
+		//			keepMeEnd = FindNextElifBlock(data).tokenPosition - 2;
+		//		}
+		//		else
+		//		{
+		//			Logger::Error("Unknown #if block start.");
+		//		}
 
-				data.CurrentToken = ifBlockStart.tokenPosition;
-				int ifBlockBegin = data.CurrentToken;
-				Consume(data, TokenType::HASHTAG);
-				Consume(data, Peek(data));
-				int keepMeStart = -1;
-				int keepMeEnd = -1;
-				if (ifBlockStart.type == PreprocessIfBlockType::IfDef || ifBlockStart.type == PreprocessIfBlockType::IfNDef)
-				{
-					Logger::Info("We are inside an ifdef or ifndef block");
-					Token& symbol = ConsumeCurrent(data, TokenType::IDENTIFIER);
-					bool symbolDefined = Symbols::IsDefined(data.PreprocessingSymbolTable, symbol);
-					if (symbolDefined && ifBlockStart.type == PreprocessIfBlockType::IfDef)
-					{
-						// If the symbol is defined and we are in an ifdef block, this is the section we want to keep
-						keepMeStart = data.CurrentToken;
-						keepMeEnd = FindNextElifBlock(data).tokenPosition - 2;
-					}
-					else if (!symbolDefined && ifBlockStart.type == PreprocessIfBlockType::IfNDef)
-					{
-						keepMeStart = data.CurrentToken;
-						keepMeEnd = FindNextElifBlock(data).tokenPosition - 2;
-					}
-				}
-				else if (ifBlockStart.type == PreprocessIfBlockType::If)
-				{
-					bool evaluation = EvaluateConstantPreprocessorExpression(data);
-					keepMeStart = FindNewlineFrom(data);
-					keepMeEnd = FindNextElifBlock(data).tokenPosition - 2;
-				}
-				else
-				{
-					Logger::Error("Unknown #if block start.");
-				}
+		//		if (keepMeStart != -1 && keepMeEnd != -1)
+		//		{
+		//			for (int i = ifBlockBegin; i < keepMeStart; i++)
+		//			{
+		//				ParserString::FreeString(data.Tokens[i].m_Lexeme);
+		//			}
+		//			data.Tokens.removeRange(ifBlockBegin, keepMeStart - 1);
+		//			int sizeRemoved = keepMeStart - 1 - ifBlockBegin;
+		//			keepMeEnd -= sizeRemoved;
+		//			ifBlockEnd -= sizeRemoved;
+		//			for (int i = keepMeEnd; i <= ifBlockEnd; i++)
+		//			{
+		//				ParserString::FreeString(data.Tokens[i].m_Lexeme);
+		//			}
+		//			data.Tokens.removeRange(keepMeEnd, ifBlockEnd);
+		//		}
+		//		else
+		//		{
+		//			// We need to look for the appropraite elif block here, or the else block if everything fails
+		//			PreprocessIfBlockDTO nextElifBlock = FindNextElifBlock(data);
+		//			while (nextElifBlock.tokenPosition != -1)
+		//			{
+		//				data.CurrentToken = nextElifBlock.tokenPosition + 1;
+		//				bool evaluation = false;
+		//				if (nextElifBlock.type == PreprocessIfBlockType::Elif)
+		//				{
+		//					evaluation = EvaluateConstantPreprocessorExpression(data);
+		//				}
+		//				else if (nextElifBlock.type == PreprocessIfBlockType::Else)
+		//				{
+		//					evaluation = true;
+		//				}
+		//				else if (nextElifBlock.type == PreprocessIfBlockType::Endif)
+		//				{
+		//					keepMeStart = -1;
+		//					keepMeEnd = -1;
+		//					break;
+		//				}
 
-				if (keepMeStart != -1 && keepMeEnd != -1)
-				{
-					for (int i = ifBlockBegin; i < keepMeStart; i++)
-					{
-						ParserString::FreeString(data.Tokens[i].m_Lexeme);
-					}
-					data.Tokens.removeRange(ifBlockBegin, keepMeStart - 1);
-					int sizeRemoved = keepMeStart - 1 - ifBlockBegin;
-					keepMeEnd -= sizeRemoved;
-					ifBlockEnd -= sizeRemoved;
-					for (int i = keepMeEnd; i <= ifBlockEnd; i++)
-					{
-						ParserString::FreeString(data.Tokens[i].m_Lexeme);
-					}
-					data.Tokens.removeRange(keepMeEnd, ifBlockEnd);
-				}
-				else
-				{
-					// We need to look for the appropraite elif block here, or the else block if everything fails
-					PreprocessIfBlockDTO nextElifBlock = FindNextElifBlock(data);
-					while (nextElifBlock.tokenPosition != -1)
-					{
-						data.CurrentToken = nextElifBlock.tokenPosition + 1;
-						bool evaluation = false;
-						if (nextElifBlock.type == PreprocessIfBlockType::Elif)
-						{
-							evaluation = EvaluateConstantPreprocessorExpression(data);
-						}
-						else if (nextElifBlock.type == PreprocessIfBlockType::Else)
-						{
-							evaluation = true;
-						}
-						else if (nextElifBlock.type == PreprocessIfBlockType::Endif)
-						{
-							keepMeStart = -1;
-							keepMeEnd = -1;
-							break;
-						}
+		//				if (evaluation)
+		//				{
+		//					data.CurrentToken = nextElifBlock.tokenPosition + 1;
+		//					keepMeStart = FindNewlineFrom(data);
+		//					keepMeEnd = FindNextElifBlock(data).tokenPosition - 2;
+		//					break;
+		//				}
+		//				nextElifBlock = FindNextElifBlock(data);
+		//			}
 
-						if (evaluation)
-						{
-							data.CurrentToken = nextElifBlock.tokenPosition + 1;
-							keepMeStart = FindNewlineFrom(data);
-							keepMeEnd = FindNextElifBlock(data).tokenPosition - 2;
-							break;
-						}
-						nextElifBlock = FindNextElifBlock(data);
-					}
-
-					if (keepMeStart != -1 && keepMeEnd != -1)
-					{
-						for (int i = ifBlockBegin; i <= keepMeStart; i++)
-						{
-							ParserString::FreeString(data.Tokens[i].m_Lexeme);
-						}
-						data.Tokens.removeRange(ifBlockBegin, keepMeStart);
-						int sizeRemoved = keepMeStart - ifBlockBegin;
-						keepMeEnd -= sizeRemoved;
-						ifBlockEnd -= sizeRemoved;
-						for (int i = keepMeEnd; i <= ifBlockEnd; i++)
-						{
-							ParserString::FreeString(data.Tokens[i].m_Lexeme);
-						}
-						data.Tokens.removeRange(keepMeEnd, ifBlockEnd);
-					}
-					else
-					{
-						// If none of the evaluations passed, just remove all the tokens in this #if-#endif block
-						for (int i = ifBlockStart.tokenPosition; i <= ifBlockEnd; i++)
-						{
-							ParserString::FreeString(data.Tokens[i].m_Lexeme);
-						}
-						data.Tokens.removeRange(ifBlockStart.tokenPosition, ifBlockEnd);
-					}
-				}
-				data.CurrentToken = ifBlockStart.tokenPosition;
-				ifBlockStart = FindIfBlockStart(data, data.CurrentToken);
-			}
-		}
+		//			if (keepMeStart != -1 && keepMeEnd != -1)
+		//			{
+		//				for (int i = ifBlockBegin; i <= keepMeStart; i++)
+		//				{
+		//					ParserString::FreeString(data.Tokens[i].m_Lexeme);
+		//				}
+		//				data.Tokens.removeRange(ifBlockBegin, keepMeStart);
+		//				int sizeRemoved = keepMeStart - ifBlockBegin;
+		//				keepMeEnd -= sizeRemoved;
+		//				ifBlockEnd -= sizeRemoved;
+		//				for (int i = keepMeEnd; i <= ifBlockEnd; i++)
+		//				{
+		//					ParserString::FreeString(data.Tokens[i].m_Lexeme);
+		//				}
+		//				data.Tokens.removeRange(keepMeEnd, ifBlockEnd);
+		//			}
+		//			else
+		//			{
+		//				// If none of the evaluations passed, just remove all the tokens in this #if-#endif block
+		//				for (int i = ifBlockStart.tokenPosition; i <= ifBlockEnd; i++)
+		//				{
+		//					ParserString::FreeString(data.Tokens[i].m_Lexeme);
+		//				}
+		//				data.Tokens.removeRange(ifBlockStart.tokenPosition, ifBlockEnd);
+		//			}
+		//		}
+		//		data.CurrentToken = ifBlockStart.tokenPosition;
+		//		ifBlockStart = FindIfBlockStart(data, data.CurrentToken);
+		//	}
+		//}
 
 		static void Preprocess(const char* fileBeingParsed, const std::vector<std::filesystem::path>& includeDirs, ParserData& data)
 		{
 			// Get all the #includes included
 			data.CurrentToken = 0;
-			ExpandIncludes(fileBeingParsed, includeDirs, data);
-			RemoveSpecialTokens(data);
-			ScriptScanner::WriteTokensToFile(data.Tokens, "out.txt");
+			PreprocessingAstNode* tree = ParsePreprocessingFile(data);
+			FileIO::CloseFileStreamWrite(data.PreprocessOutputStream);
+			FreePreprocessingNode(tree);
+			//RemoveSpecialTokens(data);
+			//ScriptScanner::WriteTokensToFile(data.Tokens, "out.txt");
 
 			// Expand all macros
-			data.CurrentToken = 0;
-			PreprocessingAstNode* preprocessedTree = ParsePreprocessingFile(data);
-			ExpandDefineMacros(data, preprocessedTree);
+			//data.CurrentToken = 0;
+			//PreprocessingAstNode* preprocessedTree = ParsePreprocessingFile(data);
+			//ExpandDefineMacros(data, preprocessedTree);
 
-			data.CurrentToken = 0;
-			CheckIfDefineBlocks(data, preprocessedTree);
+			//data.CurrentToken = 0;
+			//CheckIfDefineBlocks(data, preprocessedTree);
 
-			FreePreprocessingNode(preprocessedTree);
-			ScriptScanner::WriteTokensToFile(data.Tokens, "out.txt");
-			RemoveWhitespaceTokens(data);
+			//FreePreprocessingNode(preprocessedTree);
+			//ScriptScanner::WriteTokensToFile(data.Tokens, "out.txt");
+			//RemoveWhitespaceTokens(data);
 		}
 
 		static PreprocessingAstNode* ParsePreprocessingFile(ParserData& data)
 		{
-			return GeneratePreprocessingFileNode(ParseGroup(data));
+			return GeneratePreprocessingFileNode(ParseGroup(data, true));
 		}
 
-		static PreprocessingAstNode* ParseGroup(ParserData& data)
+		static PreprocessingAstNode* ParseGroup(ParserData& data, bool writeToPPFile)
 		{
-			int backtrackPosition = data.CurrentToken;
-			PreprocessingAstNode* result = ParseGroupPart(data);
+			int backtrackPosition = data.Scanner.Stream.Stream.Cursor;
+			PreprocessingAstNode* result = ParseGroupPart(data, writeToPPFile);
 			if (!result->success)
 			{
 				FreePreprocessingNode(result);
@@ -9470,7 +9510,7 @@ result->type = pType;
 
 			while (!AtEnd(data))
 			{
-				PreprocessingAstNode* nextGroup = ParseGroup(data);
+				PreprocessingAstNode* nextGroup = ParseGroup(data, writeToPPFile);
 				result = GenerateGroupNode(result, nextGroup);
 				if (!nextGroup->success)
 				{
@@ -9486,10 +9526,10 @@ result->type = pType;
 			return result;
 		}
 
-		static PreprocessingAstNode* ParseGroupPart(ParserData& data)
+		static PreprocessingAstNode* ParseGroupPart(ParserData& data, bool writeToPPFile)
 		{
-			int backtrackPosition = data.CurrentToken;
-			PreprocessingAstNode* ifSection = ParseIfSection(data);
+			int backtrackPosition = data.Scanner.Stream.Stream.Cursor;
+			PreprocessingAstNode* ifSection = ParseIfSection(data, writeToPPFile);
 			if (ifSection->success)
 			{
 				return ifSection;
@@ -9497,7 +9537,7 @@ result->type = pType;
 			FreePreprocessingNode(ifSection);
 			BacktrackTo(data, backtrackPosition);
 
-			PreprocessingAstNode* controlLine = ParseControlLine(data);
+			PreprocessingAstNode* controlLine = ParseControlLine(data, writeToPPFile);
 			if (controlLine->success)
 			{
 				return controlLine;
@@ -9505,7 +9545,7 @@ result->type = pType;
 			FreePreprocessingNode(controlLine);
 			BacktrackTo(data, backtrackPosition);
 
-			PreprocessingAstNode* textLine = ParseTextLine(data);
+			PreprocessingAstNode* textLine = ParseTextLine(data, writeToPPFile);
 			if (textLine->success)
 			{
 				return textLine;
@@ -9516,15 +9556,64 @@ result->type = pType;
 			return GenerateNoSuccessPreprocessingAstNode();
 		}
 
-		static PreprocessingAstNode* ParseIfSection(ParserData& data)
+		static bool IfGroupWroteToFile(PreprocessingAstNode* ifGroup)
 		{
-			int backtrackPosition = data.CurrentToken;
-			PreprocessingAstNode* ifGroup = ParseIfGroup(data);
+			bool ifGroupWroteToFile = false;
+			if (ifGroup->type == PreprocessingAstNodeType::IfGroup && ifGroup->ifGroup.evaluation)
+			{
+				ifGroupWroteToFile = true;
+			}
+			else if (ifGroup->type == PreprocessingAstNodeType::IfDefGroup && ifGroup->ifDefGroup.symbolDefined)
+			{
+				ifGroupWroteToFile = true;
+			}
+			else if (ifGroup->type == PreprocessingAstNodeType::IfNDefGroup && !ifGroup->ifNDefGroup.symbolDefined)
+			{
+				ifGroupWroteToFile = true;
+			}
+			return ifGroupWroteToFile;
+		}
+
+		static bool ElifGroupWroteToFile(PreprocessingAstNode* elifGroup)
+		{
+			if (elifGroup->type == PreprocessingAstNodeType::ElifGroup)
+			{
+				if (elifGroup->elifGroup.evaluation)
+				{
+					return true;
+				}
+			}
+		}
+
+		static bool ElifGroupsWroteToFile(PreprocessingAstNode* elifGroups)
+		{
+			if (elifGroups->type == PreprocessingAstNodeType::ElifGroups)
+			{
+				while (elifGroups->success)
+				{
+					PreprocessingAstNode* elifGroup = elifGroups->elifGroups.thisElifGroup;
+					if (ElifGroupWroteToFile(elifGroup))
+					{
+						return true;
+					}
+
+					elifGroups = elifGroups->elifGroups.nextElifGroup;
+				}
+			}
+			return false;
+		}
+
+		static PreprocessingAstNode* ParseIfSection(ParserData& data, bool writeToPPFile)
+		{
+			int backtrackPosition = data.Scanner.Stream.Stream.Cursor;
+			PreprocessingAstNode* ifGroup = ParseIfGroup(data, writeToPPFile);
 			if (ifGroup->success)
 			{
 				// Optional
-				PreprocessingAstNode* elifGroups = ParseElifGroups(data);
-				PreprocessingAstNode* elseGroup = ParseElseGroup(data);
+				bool ifGroupWroteToFile = IfGroupWroteToFile(ifGroup);
+				PreprocessingAstNode* elifGroups = ParseElifGroups(data, writeToPPFile && !ifGroupWroteToFile);
+				bool elifGroupWroteToFile = ifGroupWroteToFile || ElifGroupsWroteToFile(elifGroups);
+				PreprocessingAstNode* elseGroup = ParseElseGroup(data, writeToPPFile && !elifGroupWroteToFile);
 				Consume(data, TokenType::HASHTAG);
 				Token identifier = ConsumeCurrent(data, TokenType::IDENTIFIER);
 				Logger::Assert(ParserString::Compare(identifier.m_Lexeme, "endif"), "Expected '#endif'");
@@ -9536,55 +9625,59 @@ result->type = pType;
 			return GenerateNoSuccessPreprocessingAstNode();
 		}
 
-		static PreprocessingAstNode* ParseIfGroup(ParserData& data)
+		static PreprocessingAstNode* ParseIfGroup(ParserData& data, bool writeToPPFile)
 		{
-			int backtrackPosition = data.CurrentToken;
+			int backtrackPosition = data.Scanner.Stream.Stream.Cursor;
 			if (Match(data, TokenType::HASHTAG))
 			{
 				if (Peek(data) == TokenType::IDENTIFIER)
 				{
-					Token identifier = ConsumeCurrent(data, TokenType::IDENTIFIER);
+					Token keyword = ConsumeCurrent(data, TokenType::IDENTIFIER);
 
-					int backtrackPosition2 = data.CurrentToken;
-					if (ParserString::Compare(identifier.m_Lexeme, "if"))
-					{
-						AstNode* constantExpression = ParseConstantExpression(data);
-						if (constantExpression->success)
-						{
-							// optional
-							Consume(data, TokenType::NEWLINE);
-							PreprocessingAstNode* group = ParseGroup(data);
-							return GenerateIfGroupNode(constantExpression, group);
-						}
-						FreeNode(constantExpression);
-					}
-					BacktrackTo(data, backtrackPosition2);
-
-					if (ParserString::Compare(identifier.m_Lexeme, "ifdef"))
+					int backtrackPosition2 = data.Scanner.Stream.Stream.Cursor;
+					if (ParserString::Compare(keyword.m_Lexeme, "ifdef"))
 					{
 						if (Peek(data) == TokenType::IDENTIFIER)
 						{
 							Token identifier = ConsumeCurrent(data, TokenType::IDENTIFIER);
 							Consume(data, TokenType::NEWLINE);
-							// Optional
-							PreprocessingAstNode* group = ParseGroup(data);
-							return GenerateIfDefGroupNode(identifier, group);
+
+							bool symbolDefined = Symbols::IsDefined(data.PreprocessingSymbolTable, identifier);
+							PreprocessingAstNode* group = ParseGroup(data, writeToPPFile && symbolDefined);
+							return GenerateIfDefGroupNode(identifier, group, symbolDefined);
 						}
 					}
 					BacktrackTo(data, backtrackPosition2);
 
-					if (ParserString::Compare(identifier.m_Lexeme, "ifndef"))
+					if (ParserString::Compare(keyword.m_Lexeme, "ifndef"))
 					{
 						if (Peek(data) == TokenType::IDENTIFIER)
 						{
 							Token identifier = ConsumeCurrent(data, TokenType::IDENTIFIER);
 							Consume(data, TokenType::NEWLINE);
-							// Optional
-							PreprocessingAstNode* group = ParseGroup(data);
-							return GenerateIfNDefGroupNode(identifier, group);
+
+							bool symbolDefined = Symbols::IsDefined(data.PreprocessingSymbolTable, identifier);
+							PreprocessingAstNode* group = ParseGroup(data, writeToPPFile && !symbolDefined);
+							return GenerateIfNDefGroupNode(identifier, group, symbolDefined);
 						}
 					}
 
+				}
+				else if (Match(data, TokenType::KW_IF))
+				{
+					AstNode* constantExpression = ParseConstantExpression(data);
+					if (constantExpression->success)
+					{
+						// optional
+						Consume(data, TokenType::NEWLINE);
+						bool evaluation = false;
+						// TODO: Implement me!
+						//bool evaulation = EvaluateConstantExpression(constantExpression);
+
+						PreprocessingAstNode* group = ParseGroup(data, writeToPPFile && evaluation);
+						return GenerateIfGroupNode(constantExpression, group, evaluation);
+					}
+					FreeNode(constantExpression);
 				}
 			}
 
@@ -9592,10 +9685,10 @@ result->type = pType;
 			return GenerateNoSuccessPreprocessingAstNode();
 		}
 
-		static PreprocessingAstNode* ParseElifGroups(ParserData& data)
+		static PreprocessingAstNode* ParseElifGroups(ParserData& data, bool writeToPPFile)
 		{
-			int backtrackPosition = data.CurrentToken;
-			PreprocessingAstNode* result = ParseElifGroup(data);
+			int backtrackPosition = data.Scanner.Stream.Stream.Cursor;
+			PreprocessingAstNode* result = ParseElifGroup(data, writeToPPFile);
 			if (!result->success)
 			{
 				FreePreprocessingNode(result);
@@ -9603,15 +9696,15 @@ result->type = pType;
 				return GenerateNoSuccessPreprocessingAstNode();
 			}
 
-			PreprocessingAstNode* nextGroup = ParseElifGroups(data);
+			PreprocessingAstNode* nextGroup = ParseElifGroups(data, !ElifGroupWroteToFile(result) && writeToPPFile);
 			result = GenerateElifGroupsNode(result, nextGroup);
 
 			return result;
 		}
 
-		static PreprocessingAstNode* ParseElifGroup(ParserData& data)
+		static PreprocessingAstNode* ParseElifGroup(ParserData& data, bool writeToPPFile)
 		{
-			int backtrackPosition = data.CurrentToken;
+			int backtrackPosition = data.Scanner.Stream.Stream.Cursor;
 			if (Match(data, TokenType::HASHTAG))
 			{
 				if (Peek(data) == TokenType::IDENTIFIER)
@@ -9624,9 +9717,13 @@ result->type = pType;
 						if (constantExpression->success)
 						{
 							Consume(data, TokenType::NEWLINE);
-							// Optional
-							PreprocessingAstNode* group = ParseGroup(data);
-							return GenerateElifGroupNode(constantExpression, group);
+
+							// TODO: Implement me!
+							bool evaluation = false;
+							//bool evaluation = EvaluateConstantExpression(constantExpression);
+							PreprocessingAstNode* group = ParseGroup(data, evaluation && writeToPPFile);
+
+							return GenerateElifGroupNode(constantExpression, group, evaluation);
 						}
 						FreeNode(constantExpression);
 					}
@@ -9637,16 +9734,15 @@ result->type = pType;
 			return GenerateNoSuccessPreprocessingAstNode();
 		}
 
-		static PreprocessingAstNode* ParseElseGroup(ParserData& data)
+		static PreprocessingAstNode* ParseElseGroup(ParserData& data, bool writeToPPFile)
 		{
-			int backtrackPosition = data.CurrentToken;
+			int backtrackPosition = data.Scanner.Stream.Stream.Cursor;
 			if (Match(data, TokenType::HASHTAG))
 			{
 				if (Match(data, TokenType::KW_ELSE))
 				{
 					Consume(data, TokenType::NEWLINE);
-					// Optional
-					PreprocessingAstNode* group = ParseGroup(data);
+					PreprocessingAstNode* group = ParseGroup(data, writeToPPFile);
 					return GenerateElseGroupNode(group);
 				}
 			}
@@ -9655,9 +9751,9 @@ result->type = pType;
 			return GenerateNoSuccessPreprocessingAstNode();
 		}
 
-		static PreprocessingAstNode* ParseMacroInclude(ParserData& data)
+		static PreprocessingAstNode* ParseMacroInclude(ParserData& data, bool writeToPPFile)
 		{
-			int backtrackPosition = data.CurrentToken;
+			int backtrackPosition = data.Scanner.Stream.Stream.Cursor;
 			if (Match(data, TokenType::HASHTAG))
 			{
 				if (Peek(data) == TokenType::IDENTIFIER)
@@ -9665,9 +9761,10 @@ result->type = pType;
 					Token identifier = ConsumeCurrent(data, TokenType::IDENTIFIER);
 					if (ParserString::Compare(identifier.m_Lexeme, "include"))
 					{
-						PreprocessingAstNode* ppTokens = ParsePPTokens(data, true);
+						PreprocessingAstNode* ppTokens = ParsePPTokens(data, false, true);
 						if (ppTokens->success)
 						{
+							// TODO: Parse included file here
 							Consume(data, TokenType::NEWLINE);
 							return GenerateMacroIncludeNode(ppTokens);
 						}
@@ -9680,10 +9777,10 @@ result->type = pType;
 			return GenerateNoSuccessPreprocessingAstNode();
 		}
 
-		static PreprocessingAstNode* ParseControlLine(ParserData& data)
+		static PreprocessingAstNode* ParseControlLine(ParserData& data, bool writeToPPFile)
 		{
-			int backtrackPosition = data.CurrentToken;
-			PreprocessingAstNode* macroInclude = ParseMacroInclude(data);
+			int backtrackPosition = data.Scanner.Stream.Stream.Cursor;
+			PreprocessingAstNode* macroInclude = ParseMacroInclude(data, writeToPPFile);
 			if (macroInclude->success)
 			{
 				return macroInclude;
@@ -9695,10 +9792,10 @@ result->type = pType;
 			{
 				if (Peek(data) == TokenType::IDENTIFIER)
 				{
-					Token identifier = ConsumeCurrent(data, TokenType::IDENTIFIER);
-					int backtrackPosition2 = data.CurrentToken;
+					Token keyword = ConsumeCurrent(data, TokenType::IDENTIFIER);
+					int backtrackPosition2 = data.Scanner.Stream.Stream.Cursor;
 
-					if (ParserString::Compare(identifier.m_Lexeme, "define"))
+					if (ParserString::Compare(keyword.m_Lexeme, "define"))
 					{
 						if (Peek(data) == TokenType::IDENTIFIER)
 						{
@@ -9706,7 +9803,7 @@ result->type = pType;
 							// TODO: make sure this left parenthisis is not preceded by whitespace
 							if (Match(data, TokenType::LEFT_PAREN))
 							{
-								PreprocessingAstNode* identifierList = ParseIdentifierList(data);
+								PreprocessingAstNode* identifierList = ParseIdentifierList(data, false);
 								if (identifierList->success)
 								{
 									Match(data, TokenType::COMMA);
@@ -9718,42 +9815,46 @@ result->type = pType;
 								}
 
 								Consume(data, TokenType::RIGHT_PAREN);
-								// TODO: Something is going wrong here, because of parentheses??
-								PreprocessingAstNode* replacementList = ParseReplacementList(data);
+								PreprocessingAstNode* replacementList = ParseReplacementList(data, false);
 								if (replacementList->success)
 								{
 									Consume(data, TokenType::NEWLINE);
-									return GenerateMacroDefineFunctionNode(identifier, identifierList, replacementList);
+									PreprocessingAstNode* symbolTree = GenerateMacroDefineFunctionNode(identifier, identifierList, replacementList);
+									Symbols::AddDefineSymbol(data.PreprocessingSymbolTable, identifier, identifier.m_Line, symbolTree);
+									return symbolTree;
 								}
 								FreePreprocessingNode(replacementList);
 								FreePreprocessingNode(identifierList);
 							}
 
-							PreprocessingAstNode* replacementList = ParseReplacementList(data);
+							PreprocessingAstNode* replacementList = ParseReplacementList(data, false);
 							if (replacementList->success)
 							{
 								Consume(data, TokenType::NEWLINE);
-								return GenerateMacroDefineNode(identifier, replacementList);
+								PreprocessingAstNode* symbolTree = GenerateMacroDefineNode(identifier, replacementList);
+								Symbols::AddDefineSymbol(data.PreprocessingSymbolTable, identifier, identifier.m_Line, symbolTree);
+								return symbolTree;
 							}
 							FreePreprocessingNode(replacementList);
 						}
 					}
 					BacktrackTo(data, backtrackPosition2);
 
-					if (ParserString::Compare(identifier.m_Lexeme, "undef"))
+					if (ParserString::Compare(keyword.m_Lexeme, "undef"))
 					{
 						if (Peek(data) == TokenType::IDENTIFIER)
 						{
 							Token identifier = ConsumeCurrent(data, TokenType::IDENTIFIER);
 							Consume(data, TokenType::NEWLINE);
+							Symbols::Undefine(data.PreprocessingSymbolTable, identifier, identifier.m_Line);
 							return GenerateMacroUndefNode(identifier);
 						}
 					}
 					BacktrackTo(data, backtrackPosition2);
 
-					if (ParserString::Compare(identifier.m_Lexeme, "line"))
+					if (ParserString::Compare(keyword.m_Lexeme, "line"))
 					{
-						PreprocessingAstNode* ppTokens = ParsePPTokens(data);
+						PreprocessingAstNode* ppTokens = ParsePPTokens(data, false, false);
 						if (ppTokens->success)
 						{
 							Consume(data, TokenType::NEWLINE);
@@ -9763,19 +9864,19 @@ result->type = pType;
 					}
 					BacktrackTo(data, backtrackPosition2);
 
-					if (ParserString::Compare(identifier.m_Lexeme, "error"))
+					if (ParserString::Compare(keyword.m_Lexeme, "error"))
 					{
 						// Optional
-						PreprocessingAstNode* ppTokens = ParsePPTokens(data);
+						PreprocessingAstNode* ppTokens = ParsePPTokens(data, false, false);
 						Consume(data, TokenType::NEWLINE);
 						return GenerateMacroErrorNode(ppTokens);
 					}
 					BacktrackTo(data, backtrackPosition2);
 
-					if (ParserString::Compare(identifier.m_Lexeme, "pragma"))
+					if (ParserString::Compare(keyword.m_Lexeme, "pragma"))
 					{
 						// Optional
-						PreprocessingAstNode* ppTokens = ParsePPTokens(data);
+						PreprocessingAstNode* ppTokens = ParsePPTokens(data, false, false);
 						Consume(data, TokenType::NEWLINE);
 						return GenerateMacroPragmaNode(ppTokens);
 					}
@@ -9791,11 +9892,11 @@ result->type = pType;
 			return GenerateNoSuccessPreprocessingAstNode();
 		}
 
-		static PreprocessingAstNode* ParseTextLine(ParserData& data)
+		static PreprocessingAstNode* ParseTextLine(ParserData& data, bool writeToPPFile)
 		{
-			int backtrackPosition = data.CurrentToken;
+			int backtrackPosition = data.Scanner.Stream.Stream.Cursor;
 			// Optional
-			PreprocessingAstNode* ppTokens = ParsePPTokens(data);
+			PreprocessingAstNode* ppTokens = ParsePPTokens(data, writeToPPFile, false);
 			if (Match(data, TokenType::NEWLINE))
 			{
 				return GenerateTextLineNode(ppTokens);
@@ -9806,10 +9907,10 @@ result->type = pType;
 			return GenerateNoSuccessPreprocessingAstNode();
 		}
 
-		static PreprocessingAstNode* ParseNonDirective(ParserData& data)
+		static PreprocessingAstNode* ParseNonDirective(ParserData& data, bool writeToPPFile)
 		{
-			int backtrackPosition = data.CurrentToken;
-			PreprocessingAstNode* ppTokens = ParsePPTokens(data);
+			int backtrackPosition = data.Scanner.Stream.Stream.Cursor;
+			PreprocessingAstNode* ppTokens = ParsePPTokens(data, writeToPPFile, false);
 			if (ppTokens->success)
 			{
 				Consume(data, TokenType::NEWLINE);
@@ -9820,15 +9921,20 @@ result->type = pType;
 			return GenerateNoSuccessPreprocessingAstNode();
 		}
 
-		static PreprocessingAstNode* ParseIdentifierList(ParserData& data)
+		static PreprocessingAstNode* ParseIdentifierList(ParserData& data, bool writeToPPFile)
 		{
 			if (Peek(data) == TokenType::IDENTIFIER)
 			{
-				PreprocessingAstNode* result = GenerateIdentifierNode(ConsumeCurrent(data, TokenType::IDENTIFIER));
+				Token identifier = ConsumeCurrent(data, TokenType::IDENTIFIER);
+				PreprocessingAstNode* result = GenerateIdentifierNode(identifier);
+
+				Write(data, writeToPPFile, identifier);
+				Write(data, writeToPPFile, " ");
 
 				while (Match(data, TokenType::COMMA))
 				{
-					result = GenerateIdentifierListNode(result, ParseIdentifierList(data));
+					Write(data, writeToPPFile, ",");
+					result = GenerateIdentifierListNode(result, ParseIdentifierList(data, writeToPPFile));
 				}
 
 				return result;
@@ -9837,17 +9943,17 @@ result->type = pType;
 			return GenerateNoSuccessPreprocessingAstNode();
 		}
 
-		static PreprocessingAstNode* ParseReplacementList(ParserData& data)
+		static PreprocessingAstNode* ParseReplacementList(ParserData& data, bool writeToPPFile)
 		{
 			// Optional
-			PreprocessingAstNode* ppTokens = ParsePPTokens(data);
+			PreprocessingAstNode* ppTokens = ParsePPTokens(data, writeToPPFile, false);
 			return GenerateReplacementListNode(ppTokens);
 		}
 
-		static PreprocessingAstNode* ParsePPTokens(ParserData& data, bool isHeader)
+		static PreprocessingAstNode* ParsePPTokens(ParserData& data, bool writeToPPFile, bool isHeader)
 		{
-			int backtrackPosition = data.CurrentToken;
-			PreprocessingAstNode* result = ParsePreprocessingToken(data, isHeader);
+			int backtrackPosition = data.Scanner.Stream.Stream.Cursor;
+			PreprocessingAstNode* result = ParsePreprocessingToken(data, writeToPPFile, isHeader);
 			if (!result->success)
 			{
 				FreePreprocessingNode(result);
@@ -9855,17 +9961,13 @@ result->type = pType;
 				return GenerateNoSuccessPreprocessingAstNode();
 			}
 
-			while (!AtEnd(data))
+			if (!AtEnd(data) && result->type != PreprocessingAstNodeType::Newline)
 			{
-				PreprocessingAstNode* nextPPToken = ParsePPTokens(data, isHeader);
+				PreprocessingAstNode* nextPPToken = ParsePPTokens(data, writeToPPFile, isHeader);
 				result = GeneratePPTokensNode(result, nextPPToken);
-				if (!nextPPToken->success)
-				{
-					break;
-				}
 			}
 
-			if (AtEnd(data))
+			if (AtEnd(data) || result->type == PreprocessingAstNodeType::Newline)
 			{
 				result = GeneratePPTokensNode(result, GenerateNoSuccessPreprocessingAstNode());
 			}
@@ -9873,25 +9975,29 @@ result->type = pType;
 			return result;
 		}
 
-		static PreprocessingAstNode* ParseNumberLiteral(ParserData& data)
+		static PreprocessingAstNode* ParseNumberLiteral(ParserData& data, bool writeToPPFile)
 		{
 			if (Peek(data) == TokenType::FLOATING_POINT_LITERAL || Peek(data) == TokenType::INTEGER_LITERAL)
 			{
-				return GenerateNumberLiteralNode(ConsumeCurrent(data, Peek(data)));
+				Token token = ConsumeCurrent(data, Peek(data));
+				Write(data, writeToPPFile, token);
+				Write(data, writeToPPFile, " ");
+				return GenerateNumberLiteralNode(token);
 			}
 
 			return GenerateNoSuccessPreprocessingAstNode();
 		}
 
 		// Preprocessor Stuff
-		static PreprocessingAstNode* ParsePreprocessingToken(ParserData& data, bool isHeader)
+		static PreprocessingAstNode* ParsePreprocessingToken(ParserData& data, bool writeToPPFile, bool isHeader)
 		{
 			if (Peek(data) == TokenType::NEWLINE || Peek(data) == TokenType::END_OF_FILE)
 			{
-				return GenerateNoSuccessPreprocessingAstNode();
+				Write(data, writeToPPFile, "\n");
+				return GenerateNewlineNode();
 			}
 
-			int backtrackPosition = data.CurrentToken;
+			int backtrackPosition = data.Scanner.Stream.Stream.Cursor;
 			if (Match(data, TokenType::HASHTAG))
 			{
 				if (Peek(data) == TokenType::IDENTIFIER)
@@ -9913,7 +10019,7 @@ result->type = pType;
 
 			if (isHeader)
 			{
-				PreprocessingAstNode* headerName = ParseHeaderName(data);
+				PreprocessingAstNode* headerName = ParseHeaderName(data, false);
 				if (headerName->success)
 				{
 					return headerName;
@@ -9924,10 +10030,13 @@ result->type = pType;
 
 			if (Peek(data) == TokenType::IDENTIFIER)
 			{
-				return GenerateIdentifierNode(ConsumeCurrent(data, TokenType::IDENTIFIER));
+				Token token = ConsumeCurrent(data, TokenType::IDENTIFIER);
+				Write(data, writeToPPFile, token);
+				Write(data, writeToPPFile, " ");
+				return GenerateIdentifierNode(token);
 			}
 
-			PreprocessingAstNode* numberLiteral = ParseNumberLiteral(data);
+			PreprocessingAstNode* numberLiteral = ParseNumberLiteral(data, writeToPPFile);
 			if (numberLiteral->success)
 			{
 				return numberLiteral;
@@ -9935,7 +10044,7 @@ result->type = pType;
 			FreePreprocessingNode(numberLiteral);
 			BacktrackTo(data, backtrackPosition);
 
-			PreprocessingAstNode* characterLiteral = ParseCharacterLiteral(data);
+			PreprocessingAstNode* characterLiteral = ParseCharacterLiteral(data, writeToPPFile);
 			if (characterLiteral->success)
 			{
 				return characterLiteral;
@@ -9943,7 +10052,7 @@ result->type = pType;
 			FreePreprocessingNode(characterLiteral);
 			BacktrackTo(data, backtrackPosition);
 
-			PreprocessingAstNode* stringLiteral = ParseStringLiteral(data);
+			PreprocessingAstNode* stringLiteral = ParseStringLiteral(data, writeToPPFile);
 			if (stringLiteral->success)
 			{
 				return stringLiteral;
@@ -9951,7 +10060,7 @@ result->type = pType;
 			FreePreprocessingNode(stringLiteral);
 			BacktrackTo(data, backtrackPosition);
 
-			PreprocessingAstNode* preprocessingOpOrPunc = ParsePreprocessingOpOrPunc(data);
+			PreprocessingAstNode* preprocessingOpOrPunc = ParsePreprocessingOpOrPunc(data, writeToPPFile);
 			if (preprocessingOpOrPunc->success)
 			{
 				return preprocessingOpOrPunc;
@@ -9961,10 +10070,13 @@ result->type = pType;
 
 			// If nothing else succeeds, just treat the current token as an identifier because
 			// it's not a newline and it's not an EOF token
-			return GenerateIdentifierNode(ConsumeCurrent(data, Peek(data)));
+			Token token = ConsumeCurrent(data, Peek(data));
+			Write(data, writeToPPFile, token);
+			Write(data, writeToPPFile, " ");
+			return GenerateIdentifierNode(token);
 		}
 
-		static PreprocessingAstNode* ParseHeaderName(ParserData& data)
+		static PreprocessingAstNode* ParseHeaderName(ParserData& data, bool writeToPPFile)
 		{
 			if (Match(data, TokenType::LEFT_ANGLE_BRACKET))
 			{
@@ -9996,46 +10108,74 @@ result->type = pType;
 			return GenerateNoSuccessPreprocessingAstNode();
 		}
 
-		static PreprocessingAstNode* ParseCharacterLiteral(ParserData& data)
+		static PreprocessingAstNode* ParseCharacterLiteral(ParserData& data, bool writeToPPFile)
 		{
 			if (Peek(data) == TokenType::CHARACTER_LITERAL)
 			{
-				return GenerateCharacterLiteralNode(ConsumeCurrent(data, TokenType::CHARACTER_LITERAL));
+				Token token = ConsumeCurrent(data, TokenType::CHARACTER_LITERAL);
+				Write(data, writeToPPFile, token);
+				Write(data, writeToPPFile, " ");
+				return GenerateCharacterLiteralNode(token);
 			}
 			return GenerateNoSuccessPreprocessingAstNode();
 		}
 
-		static PreprocessingAstNode* ParseStringLiteral(ParserData& data)
+		static PreprocessingAstNode* ParseStringLiteral(ParserData& data, bool writeToPPFile)
 		{
 			if (Peek(data) == TokenType::STRING_LITERAL)
 			{
 				Token stringLiteral = ConsumeCurrent(data, TokenType::STRING_LITERAL);
+				Write(data, writeToPPFile, "\"");
+				Write(data, writeToPPFile, stringLiteral);
+				Write(data, writeToPPFile, "\" ");
 				return GenerateStringLiteralNode(stringLiteral);
 			}
 
 			return GenerateNoSuccessPreprocessingAstNode();
 		}
 
-		static PreprocessingAstNode* ParsePreprocessingOpOrPunc(ParserData& data)
+		static PreprocessingAstNode* ParsePreprocessingOpOrPunc(ParserData& data, bool writeToPPFile)
 		{
 			if (PeekIn(data, { TokenType::LEFT_CURLY_BRACKET, TokenType::RIGHT_CURLY_BRACKET, TokenType::LEFT_BRACKET, TokenType::RIGHT_BRACKET, TokenType::HASHTAG,
 				TokenType::LEFT_PAREN, TokenType::RIGHT_PAREN, TokenType::LEFT_ANGLE_BRACKET, TokenType::RIGHT_ANGLE_BRACKET, TokenType::COLON, TokenType::MODULO,
-				TokenType::SEMICOLON, TokenType::DOT, TokenType::KW_NEW, TokenType::KW_DELETE, TokenType::QUESTION, TokenType::STAR, TokenType::STAR, TokenType::ARROW,
+				TokenType::SEMICOLON, TokenType::DOT, TokenType::KW_NEW, TokenType::KW_DELETE, TokenType::QUESTION, TokenType::STAR, TokenType::ARROW,
 				TokenType::TILDE, TokenType::BANG, TokenType::PLUS, TokenType::DIV, TokenType::CARET, TokenType::AND, TokenType::PIPE, TokenType::EQUAL,
 				TokenType::PLUS_EQUAL, TokenType::MINUS_EQUAL, TokenType::STAR_EQUAL, TokenType::DIV_EQUAL, TokenType::MODULO_EQUAL, TokenType::CARET_EQUAL, TokenType::AND_EQUAL,
 				TokenType::PIPE_EQUAL, TokenType::LEFT_SHIFT, TokenType::RIGHT_SHIFT, TokenType::EQUAL_EQUAL, TokenType::BANG_EQUAL, TokenType::LESS_THAN_EQ, TokenType::GREATER_THAN_EQ,
 				TokenType::LOGICAL_AND, TokenType::LOGICAL_OR, TokenType::LEFT_SHIFT_EQUAL, TokenType::RIGHT_SHIFT_EQUAL, TokenType::PLUS_PLUS, TokenType::MINUS_MINUS,
 				TokenType::COMMA }))
 			{
-				return GeneratePreprocessingOpOrPuncNode(ConsumeCurrent(data, Peek(data)));
+				Token token = ConsumeCurrent(data, Peek(data));
+				if (writeToPPFile)
+				{
+					if (token.m_Type == TokenType::LEFT_CURLY_BRACKET)
+					{
+						data.indentLevel++;
+					}
+					else if (token.m_Type == TokenType::RIGHT_CURLY_BRACKET)
+					{
+						data.indentLevel--;
+						Write(data, true, "\n");
+					}
+
+					FileIO::WriteToStream(data.PreprocessOutputStream, token.m_Lexeme);
+					if (token.m_Type != TokenType::LEFT_CURLY_BRACKET && token.m_Type != TokenType::RIGHT_CURLY_BRACKET && token.m_Type != TokenType::LEFT_BRACKET && 
+						token.m_Type != TokenType::LEFT_PAREN && token.m_Type != TokenType::LEFT_ANGLE_BRACKET && 
+						token.m_Type != TokenType::COLON && token.m_Type != TokenType::SEMICOLON && token.m_Type != TokenType::DOT && token.m_Type != TokenType::ARROW &&
+						token.m_Type != TokenType::TILDE && token.m_Type != TokenType::BANG && token.m_Type != TokenType::PLUS_PLUS && token.m_Type != TokenType::MINUS_MINUS)
+					{
+						FileIO::WriteToStream(data.PreprocessOutputStream, " ");
+					}
+				}
+				return GeneratePreprocessingOpOrPuncNode(token);
 			}
 
 			return GenerateNoSuccessPreprocessingAstNode();
 		}
 
-		static PreprocessingAstNode* ParseHCharSequence(ParserData& data);
-		static PreprocessingAstNode* ParseHChar(ParserData& data);
-		static PreprocessingAstNode* ParseQCharSequence(ParserData& data);
-		static PreprocessingAstNode* ParseQChar(ParserData& data);
+		static PreprocessingAstNode* ParseHCharSequence(ParserData& data, bool writeToPPFile);
+		static PreprocessingAstNode* ParseHChar(ParserData& data, bool writeToPPFile);
+		static PreprocessingAstNode* ParseQCharSequence(ParserData& data, bool writeToPPFile);
+		static PreprocessingAstNode* ParseQChar(ParserData& data, bool writeToPPFile);
 	}
 }

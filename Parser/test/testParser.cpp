@@ -1,4 +1,4 @@
-#ifndef TEST_PARSER_CPP
+#ifdef TEST_PARSER_CPP
 #define TEST_PARSER_CPP
 
 // #include <vector>
@@ -17,6 +17,14 @@ namespace Parser
 		float m_Member;
 		std::vector m_Vec;
 	};
+}
+
+#else
+
+int main()
+{
+	printf("HELLO WOOOOOOOOOOOOOORLD\n");
+	return 0;
 }
 
 #endif

@@ -24,7 +24,7 @@ namespace CppParser
 
 	namespace Symbols
 	{
-		void AddUndefine(PPSymbolTable& symbolTable, const Token& token, int lineUndefined);
+		void Undefine(PPSymbolTable& symbolTable, const Token& token, int lineUndefined);
 		void AddDefineSymbol(PPSymbolTable& symbolTable, const Token& macroIdentifierToken, int lineDefined, PreprocessingAstNode* symbolTree);
 		void AddGlobalDefineSymbol(PPSymbolTable& symbolTable, const char* symbolName);
 		List<Token> ExpandMacro(const PPSymbolTable& symbolTable, int currentToken, const List<Token>& tokens);

@@ -69,11 +69,110 @@ namespace CppParser
 			}
 		}
 
-		FileStream OpenFileStream(const char* filepath)
+		CountingFileStream OpenCountingFileStreamRead(const char* filepath)
+		{
+			FileStream stream = OpenFileStreamRead(filepath);
+			CountingFileStream countingStream;
+			countingStream.Line = 1;
+			countingStream.Column = 1;
+			countingStream.Stream = stream;
+			return countingStream;
+		}
+
+		void CloseCountingFileStreamRead(CountingFileStream& stream)
+		{
+			CloseFileStreamRead(stream.Stream);
+		}
+
+		char StreamReadChar(CountingFileStream& stream)
+		{
+			char c = StreamReadChar(stream.Stream);
+			stream.Column += c == '\t' ? 4 : 1;
+			if (c == '\n')
+			{
+				stream.Line++;
+				stream.Column = 1;
+			}
+
+			return c;
+		}
+
+		char StreamCharAt(const CountingFileStream& stream, int index)
+		{
+			return StreamCharAt(stream.Stream, index);
+		}
+
+		char StreamPeek(const CountingFileStream& stream, int numBytesToPeekAhead)
+		{
+			return StreamPeek(stream.Stream, numBytesToPeekAhead);
+		}
+
+		void StreamGoTo(CountingFileStream& stream, int newCursorPosition)
+		{
+			// Get the right line number
+			if (newCursorPosition < stream.Stream.Cursor)
+			{
+				for (int i = stream.Stream.Cursor; i >= newCursorPosition; i--)
+				{
+					StreamGoTo(stream.Stream, i);
+					char c = StreamPeek(stream.Stream, 0);
+					if (c == '\n')
+					{
+						stream.Line--;
+					}
+				}
+
+				// Once we get to the appropriate line number, we need to find the beginning
+				// of the line to get the right column number
+				int lineStart = stream.Stream.Cursor;
+				while (lineStart > 0)
+				{
+					StreamGoTo(stream.Stream, lineStart);
+					char c = StreamPeek(stream.Stream, 0);
+					if (c == '\n')
+					{
+						lineStart++;
+						break;
+					}
+					lineStart--;
+				}
+
+				stream.Column = stream.Stream.Cursor - lineStart;
+			}
+			else if (newCursorPosition > stream.Stream.Cursor)
+			{
+				for (int i = stream.Stream.Cursor; i <= newCursorPosition; i++)
+				{
+					StreamGoTo(stream.Stream, i);
+					char c = StreamPeek(stream.Stream, 0);
+					stream.Column += c == '\t' ? 4 : 1;
+					if (c == '\n')
+					{
+						stream.Line++;
+						stream.Column = 1;
+					}
+				}
+			}
+
+			StreamGoTo(stream.Stream, newCursorPosition);
+		}
+
+		const char* StreamSubstring(const CountingFileStream& stream, int start, int size)
+		{
+			return StreamSubstring(stream.Stream, start, size);
+		}
+
+		bool StreamAtEnd(const CountingFileStream& stream)
+		{
+			return StreamAtEnd(stream.Stream);
+		}
+
+		FileStream OpenFileStreamRead(const char* filepath)
 		{
 			Logger::AssertCritical(filepath != nullptr, "Invalid filepath. Filepath cannot be null.");
 
 			FileStream res;
+			res.Type = StreamType::Read;
 			res.fp = fopen(filepath, "rb");
 			res.ChunkStart = 0;
 			res.Cursor = 0;
@@ -107,8 +206,10 @@ namespace CppParser
 			return res;
 		}
 
-		void CloseFileStream(FileStream& file)
+		void CloseFileStreamRead(FileStream& file)
 		{
+			Logger::AssertCritical(file.Type == StreamType::Read, "Invalid file stream. This function is only valid for read file streams.");
+
 			if (file.Data)
 			{
 				FreeMem((void*)file.Data);
@@ -130,6 +231,8 @@ namespace CppParser
 
 		char StreamReadChar(FileStream& file)
 		{
+			Logger::AssertCritical(file.Type == StreamType::Read, "Invalid file stream. This function is only valid for read file streams.");
+
 			if (file.Cursor >= file.Size)
 			{
 				Logger::Warning("Reading character out of stream bounds. Returning null byte.");
@@ -151,48 +254,96 @@ namespace CppParser
 
 		char StreamCharAt(const FileStream& file, int index)
 		{
-			int backupCursor = file.Cursor;
+			Logger::AssertCritical(file.Type == StreamType::Read, "Invalid file stream. This function is only valid for read file streams.");
+
 			FileStream streamShallowCopy = file;
 			streamShallowCopy.Cursor = index;
 			char c = StreamReadChar(streamShallowCopy);
 			return c;
 		}
 
-		char StreamPeek(const FileStream& file, int numBytesToPeek)
+		char StreamPeek(const FileStream& file, int numBytesToPeekAhead)
 		{
-			if (numBytesToPeek == 0)
+			Logger::AssertCritical(file.Type == StreamType::Read, "Invalid file stream. This function is only valid for read file streams.");
+
+			if (numBytesToPeekAhead == 0)
 			{
 				return file.Data[file.Cursor];
 			}
 
-			int backupCursor = file.Cursor;
 			FileStream streamShallowCopy = file;
-			streamShallowCopy.Cursor += numBytesToPeek;
+			streamShallowCopy.Cursor += numBytesToPeekAhead;
 			char c = StreamReadChar(streamShallowCopy);
 			return c;
 		}
 
 		void StreamGoTo(FileStream& file, int newCursorPosition)
 		{
+			Logger::AssertCritical(file.Type == StreamType::Read, "Invalid file stream. This function is only valid for read file streams.");
+
 			file.Cursor = newCursorPosition;
 			StreamReadChunk(file, 1);
 		}
 
-		const char* StreamSubstring(FileStream& file, int start, int size)
+		const char* StreamSubstring(const FileStream& file, int start, int size)
 		{
+			Logger::AssertCritical(file.Type == StreamType::Read, "Invalid file stream. This function is only valid for read file streams.");
+
 			Logger::AssertCritical(size < STREAM_BUFFER_SIZE, "This File I/O library does not support substrings greater than '%d' characters right now.", STREAM_BUFFER_SIZE);
-			int backupCursor = file.Cursor;
-			file.Cursor = start;
-			StreamReadChunk(file, size);
+			FileStream streamShallowCopy = file;
+			streamShallowCopy.Cursor = start;
+			StreamReadChunk(streamShallowCopy, size);
 			const char* substring = ParserString::Substring(file.Data, start - file.ChunkStart, size);
-			file.Cursor = backupCursor;
-			StreamReadChunk(file, 1);
 			return substring;
 		}
 
 		bool StreamAtEnd(const FileStream& stream)
 		{
+			Logger::AssertCritical(stream.Type == StreamType::Read, "Invalid file stream. This function is only valid for read file streams.");
+
 			return stream.Cursor == stream.Size;
+		}
+
+		FileStream OpenFileStreamWrite(const char* filepath)
+		{
+			Logger::AssertCritical(filepath != nullptr, "Invalid filepath. Filepath cannot be null.");
+
+			FileStream res;
+			res.Type = StreamType::Write;
+			res.fp = fopen(filepath, "w+");
+			res.ChunkStart = 0;
+			res.Cursor = 0;
+			res.Size = 0;
+			res.Data = nullptr;
+			res.Filepath = ParserString::CreateString(filepath);
+
+			FILE* filePointer;
+			filePointer = fopen(filepath, "w+");
+			return res;
+		}
+
+		void CloseFileStreamWrite(FileStream& stream)
+		{
+			Logger::AssertCritical(stream.Type == StreamType::Write, "Invalid file stream. This function is only valid for write file streams.");
+
+			if (stream.fp)
+			{
+				fclose(stream.fp);
+				stream.fp = nullptr;
+			}
+
+			if (stream.Filepath)
+			{
+				ParserString::FreeString(stream.Filepath);
+				stream.Filepath = nullptr;
+			}
+		}
+
+		void WriteToStream(FileStream& stream, const char* strToWrite)
+		{
+			Logger::AssertCritical(stream.Type == StreamType::Write, "Invalid file stream. This function is only valid for write file streams.");
+
+			fprintf(stream.fp, "%s", strToWrite);
 		}
 
 		// Internal functions

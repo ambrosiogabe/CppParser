@@ -8,10 +8,8 @@ namespace CppParser
 {
 	struct ScannerData
 	{
-		int Line;
-		int Column;
 		int64_t Start;
-		FileStream Stream;
+		CountingFileStream Stream;
 		const char* Filepath;
 	};
 
@@ -23,12 +21,18 @@ namespace CppParser
 
 		List<Token> ScanTokens(const char* filepath, bool includeWhitespace = false);
 		Token ScanToken(ScannerData& scannerData, bool includeWhitespace = false);
+		TokenType PeekToken(const ScannerData& scannerData, bool includeWhitespace = false);
 
 		void DebugPrint(const List<Token>& tokens, bool printLineAndCol = true, bool printWhitespace = false);
 		void WriteTokensToFile(const List<Token>& tokens, const char* filename);
 		const char* TokenName(TokenType type);
 
 		void FreeTokens(List<Token>& tokens);
+
+		inline bool AtEnd(const ScannerData& data)
+		{
+			return FileIO::StreamAtEnd(data.Stream);
+		}
 	};
 }
 

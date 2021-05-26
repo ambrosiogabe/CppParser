@@ -22,7 +22,7 @@ namespace CppParser
 		// Public functions
 		// ===========================================================================================
 
-		void AddUndefine(PPSymbolTable& symbolTable, const Token& token, int lineUndefined)
+		void Undefine(PPSymbolTable& symbolTable, const Token& token, int lineUndefined)
 		{
 			unsigned long tokenHash = HashToken(token);
 			for (DefineSymbol& hash : symbolTable.DefineSymbols)
@@ -30,6 +30,7 @@ namespace CppParser
 				if (hash.hash == tokenHash && token.m_Line != hash.lineDefined && ParserString::Compare(token.m_Lexeme, hash.token.m_Lexeme))
 				{
 					hash.lineUndefined = lineUndefined;
+					symbolTable.DefineSymbols.removeByElement(hash);
 					return;
 				}
 			}
