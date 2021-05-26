@@ -3,31 +3,18 @@
 #include "cppParser/CppTokens.h"
 #include "cppParser/Ast.h"
 #include "CppUtils/CppUtils.h"
+#include "cppParser/ParserStructs.h"
 
 namespace CppParser
 {
 	using namespace CppUtils;
-
-	struct DefineSymbol
-	{
-		PreprocessingAstNode* symbolTree;
-		Token token;
-		unsigned long hash;
-		int lineDefined;
-		int lineUndefined;
-	};
-
-	struct PPSymbolTable
-	{
-		List<DefineSymbol> DefineSymbols;
-	};
 
 	namespace Symbols
 	{
 		void Undefine(PPSymbolTable& symbolTable, const Token& token, int lineUndefined);
 		void AddDefineSymbol(PPSymbolTable& symbolTable, const Token& macroIdentifierToken, int lineDefined, PreprocessingAstNode* symbolTree);
 		void AddGlobalDefineSymbol(PPSymbolTable& symbolTable, const char* symbolName);
-		List<Token> ExpandMacro(const PPSymbolTable& symbolTable, int currentToken, const List<Token>& tokens);
+		const char* ExpandMacro(ParserData& data, const Token& token);
 
 		bool IsDefined(const PPSymbolTable& symbolTable, const Token& token);
 		bool IsFunctionMacroDefine(const PPSymbolTable& symbolTable, const Token& token);

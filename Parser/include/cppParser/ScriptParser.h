@@ -4,28 +4,13 @@
 #include "cppParser/Ast.h"
 #include "cppParser/Symbols.h"
 #include "CppUtils/CppUtils.h"
+#include "cppParser/ParserStructs.h"
 
 #include <filesystem>
 
 namespace CppParser
 {
 	using namespace CppUtils;
-	typedef void(*AstWalkTreeCallbackFn)(AstNode* node);
-	typedef void(*AstWalkPpTreeCallbackFn)(PreprocessingAstNode* node);
-	typedef void(*AstWalkTreeUserDataCallbackFn)(AstNode* node, void* userData);
-	typedef void(*AstWalkPpTreeUserDataCallbackFn)(PreprocessingAstNode* node, void* userData);
-
-	// This is not a POD because of the list
-	struct ParserData
-	{
-		//List<Token> Tokens;
-		int CurrentToken;
-		AstNode* Tree;
-		PPSymbolTable PreprocessingSymbolTable;
-		ScannerData Scanner;
-		FileStream PreprocessOutputStream;
-		int indentLevel = 0;
-	};
 
 	namespace Parser
 	{

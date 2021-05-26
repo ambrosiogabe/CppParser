@@ -13,10 +13,10 @@ namespace CppParser
 		static unsigned long HashToken(const Token& token);
 		static bool IsSameHashData(const Token& t1, unsigned long hash1, int lineDefined, const DefineSymbol& hash2);
 		static void MacroAddToReplacementList(PreprocessingAstNode* node, void* userData);
-		static List<Token> ExpandSimpleMacro(const PPSymbolTable& symbolTable, PreprocessingAstNode* preprocessingNode, int newLine);
+		static const char* ExpandSimpleMacro(const PPSymbolTable& symbolTable, PreprocessingAstNode* preprocessingNode, int newLine);
 		static void FunctionMacroAddToIdentifierList(PreprocessingAstNode* node, void* userData);
-		static List<Token> ExpandFunctionMacro(const PPSymbolTable& symbolTable,
-			PreprocessingAstNode* preprocessingNode, int newLine, const List<Token>& tokens, int currentToken);
+		static const char* ExpandFunctionMacro(const PPSymbolTable& symbolTable,
+			PreprocessingAstNode* preprocessingNode, int newLine, ParserData& data);
 
 		// ===========================================================================================
 		// Public functions
@@ -71,9 +71,9 @@ namespace CppParser
 			symbolTable.DefineSymbols.push(DefineSymbol{ nullptr, tmpToken, tokenHash, -1, INT_MAX });
 		}
 
-		List<Token> ExpandMacro(const PPSymbolTable& symbolTable, int currentToken, const List<Token>& tokens)
+		const char* ExpandMacro(ParserData& data, const Token& token)
 		{
-			const Token& token = tokens.get(currentToken);
+			const PPSymbolTable& symbolTable = data.PreprocessingSymbolTable;
 			unsigned long tokenHash = HashToken(token);
 			for (const DefineSymbol& hash : symbolTable.DefineSymbols)
 			{
@@ -93,18 +93,14 @@ namespace CppParser
 						}
 						else if (hash.symbolTree->type == PreprocessingAstNodeType::MacroDefineFunction)
 						{
-							return ExpandFunctionMacro(symbolTable, hash.symbolTree, token.m_Line, tokens, currentToken);
+							return ExpandFunctionMacro(symbolTable, hash.symbolTree, token.m_Line, data);
 						}
-					}
-					else
-					{
-						return List<Token>();
 					}
 				}
 			}
 
 			Logger::Warning("Unable to expand macro '%s'", token.m_Lexeme);
-			return {};
+			return "";
 		}
 
 		bool IsDefined(const PPSymbolTable& symbolTable, const Token& token)
@@ -230,6 +226,10 @@ namespace CppParser
 				{
 					return;
 				}
+				else if (ppToken->type == PreprocessingAstNodeType::Newline)
+				{
+					replacementListResult.push(Token{ -1, -1, TokenType::NEWLINE, "\n" });
+				}
 				else
 				{
 					Logger::Warning("Unknown replacement list preprocessing token while expanding macro.");
@@ -237,15 +237,28 @@ namespace CppParser
 			}
 		}
 
-		static List<Token> ExpandSimpleMacro(const PPSymbolTable& symbolTable, PreprocessingAstNode* preprocessingNode, int newLine)
+		static const char* ExpandSimpleMacro(const PPSymbolTable& symbolTable, PreprocessingAstNode* preprocessingNode, int newLine)
 		{
 			List<Token> replacementListResult;
 			Parser::WalkPreprocessingTree(preprocessingNode->macroDefine.replacementList, (void*)&replacementListResult, MacroAddToReplacementList);
+
+			StringBuilder sb;
 			for (Token& token : replacementListResult)
 			{
 				token.m_Line = newLine;
+				if (token.m_Type == TokenType::STRING_LITERAL)
+				{
+					sb.Append("\"");
+					sb.Append(token.m_Lexeme);
+					sb.Append("\"");
+				}
+				else
+				{
+					sb.Append(token.m_Lexeme);
+				}
 			}
-			return replacementListResult;
+
+			return sb.c_str_copy();
 		}
 
 		static void FunctionMacroAddToIdentifierList(PreprocessingAstNode* node, void* userData)
@@ -273,8 +286,8 @@ namespace CppParser
 			List<Token>& replacementListResult;
 		};
 
-		static List<Token> ExpandFunctionMacro(const PPSymbolTable& symbolTable,
-			PreprocessingAstNode* preprocessingNode, int newLine, const List<Token>& tokens, int currentToken)
+		static const char* ExpandFunctionMacro(const PPSymbolTable& symbolTable,
+			PreprocessingAstNode* preprocessingNode, int newLine, ParserData& data)
 		{
 			List<Token> functionIdentifiers;
 			List<Token> replacementListResult;
@@ -284,75 +297,85 @@ namespace CppParser
 			// Replace function identifiers here
 			Parser::WalkPreprocessingTree(preprocessingNode, (void*)&replacementListResult, MacroAddToReplacementList);
 
-			currentToken++;
-			Logger::Assert(currentToken < tokens.size() && tokens[currentToken].m_Type == TokenType::LEFT_PAREN, "Macro function definition must begin with a left parenthesis");
-			currentToken++;
-			int replacementListTokenStart = currentToken;
+			List<const char*> functionIdentifierReplacements;
+			Token token = ScriptScanner::ScanToken(data.Scanner, true);
+			Logger::Assert(token.m_Type == TokenType::LEFT_PAREN, "Macro function must begin with a left parenthesis.");
 
-			for (int i = 0; i < replacementListResult.size(); i++)
+			int grouping = 1;
+			// Get function identifier replacements
+			while (!ScriptScanner::AtEnd(data.Scanner) && grouping > 0)
 			{
-				int parameterIndex = 0;
-				currentToken = replacementListTokenStart;
-				for (Token& identifier : functionIdentifiers)
+				StringBuilder sb;
+				while (!ScriptScanner::AtEnd(data.Scanner))
 				{
-					Token token = replacementListResult[i];
-
-					// If we have the same lexeme here
-					if (ParserString::Compare(identifier.m_Lexeme, token.m_Lexeme))
+					token = ScriptScanner::ScanToken(data.Scanner, true);
+					if (token.m_Type == TokenType::LEFT_PAREN)
 					{
-						List<Token> replacementForIdentifier;
-						int argumentIndex = 0;
-						bool atParameter = parameterIndex == argumentIndex;
-						// Replace the lexeme with the actual tokens that would have been supplied
-						int grouping = 0;
-						while (currentToken < tokens.size())
+						grouping++;
+					}
+					else if (token.m_Type == TokenType::RIGHT_PAREN)
+					{
+						grouping--;
+						if (grouping == 0)
 						{
-							const Token& replacement = tokens[currentToken];
-							if (replacement.m_Type == TokenType::LEFT_PAREN)
-							{
-								grouping++;
-							}
-							else if (replacement.m_Type == TokenType::RIGHT_PAREN)
-							{
-								grouping--;
-								if (grouping < 0)
-								{
-									break;
-								}
-							}
-							else if (replacement.m_Type == TokenType::COMMA && grouping <= 0)
-							{
-								if (atParameter)
-								{
-									break;
-								}
-								argumentIndex++;
-								if (argumentIndex > parameterIndex)
-								{
-									break;
-								}
-							}
-
-							if (atParameter)
-							{
-								replacementForIdentifier.push(replacement);
-							}
-							currentToken++;
-							atParameter = parameterIndex == argumentIndex;
+							break;
 						}
-
-						replacementListResult.removeByIndex(i);
-						replacementListResult.insert(replacementForIdentifier.begin(), replacementForIdentifier.end(), i);
+					}
+					else if (token.m_Type == TokenType::COMMA && grouping == 1)
+					{
 						break;
 					}
-					parameterIndex++;
+					sb.Append(token.m_Lexeme);
+				}
+				functionIdentifierReplacements.push(sb.c_str_copy());
+			}
+
+			Logger::Assert(functionIdentifierReplacements.size() == functionIdentifiers.size(),
+				"Invalid number of arguments for function macro. You gave '%d' arguments, was expecting '%d' arguments.",
+				functionIdentifierReplacements.size(), functionIdentifiers.size());
+
+			// Create the final string by replacing all function identifiers with the appropriate replacement
+			StringBuilder sb;
+			for (const Token& token : replacementListResult)
+			{
+				int functionIdentifierSlot = -1;
+				int index = 0;
+				for (const Token& functionId : functionIdentifiers)
+				{
+					if (ParserString::Compare(token.m_Lexeme, functionId.m_Lexeme))
+					{
+						functionIdentifierSlot = index;
+						break;
+					}
+					index++;
 				}
 
-				// Make sure to copy the strings for the new tokens so we don't run into issues when freeing the memory
-				replacementListResult[i].m_Lexeme = ParserString::Copy(replacementListResult[i].m_Lexeme);
-				replacementListResult[i].m_Line = newLine;
+				if (functionIdentifierSlot != -1)
+				{
+					Logger::AssertCritical(functionIdentifierSlot < functionIdentifierReplacements.size(), "Invalid function id slot. We should never hit this exception...");
+					sb.Append(functionIdentifierReplacements[functionIdentifierSlot]);
+				}
+				else
+				{
+					if (token.m_Type == TokenType::STRING_LITERAL)
+					{
+						sb.Append("\"");
+						sb.Append(token.m_Lexeme);
+						sb.Append("\"");
+					}
+					else
+					{
+						sb.Append(token.m_Lexeme);
+					}
+				}
 			}
-			return replacementListResult;
+
+			for (const char* str : functionIdentifierReplacements)
+			{
+				ParserString::FreeString(str);
+			}
+
+			return sb.c_str_copy();
 		}
 	}
 }

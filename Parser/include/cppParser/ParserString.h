@@ -27,6 +27,7 @@ namespace CppParser
 		void Append(const char* strToAppend);
 		void Append(char character);
 		const char* c_str();
+		const char* c_str_copy();
 
 	private:
 		List<char> contents;

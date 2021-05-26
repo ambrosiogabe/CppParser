@@ -164,4 +164,10 @@ namespace CppParser
 		contents.pop();
 		return contents.begin();
 	}
+
+	const char* StringBuilder::c_str_copy()
+	{
+		const char* copy = ParserString::CreateString(c_str());
+		return copy;
+	}
 }

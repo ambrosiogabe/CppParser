@@ -29,7 +29,6 @@ namespace CppParser
 
 			const char* preprocessOutputPath = ParserString::Join(fileBeingParsed, ".o");
 			ParserData data = {
-				0,
 				nullptr,
 				PPSymbolTable(),
 				ScriptScanner::OpenScanner(fileBeingParsed),
@@ -989,6 +988,8 @@ namespace CppParser
 #define WALK(node) WalkPreprocessingTree(node, userData, callbackFn, notificationType, postTraversalCallback)
 			switch (tree->type)
 			{
+			case PreprocessingAstNodeType::Newline:
+				break;
 			case PreprocessingAstNodeType::PreprocessingFile:
 				WALK(tree->preprocessingFile.group);
 				break;
@@ -1114,7 +1115,6 @@ namespace CppParser
 			Token currentToken = ScriptScanner::ScanToken(data.Scanner);
 			if (currentToken.m_Type == type)
 			{
-				data.CurrentToken++;
 				return;
 			}
 
@@ -1174,7 +1174,6 @@ namespace CppParser
 			if (currentToken.m_Type == type)
 			{
 				// We aren't concerned with the lexeme here, so just free the result
-				data.CurrentToken++;
 				ParserString::FreeString(currentToken.m_Lexeme);
 				return true;
 			}
@@ -1188,7 +1187,6 @@ namespace CppParser
 			Token currentToken = ScriptScanner::ScanToken(data.Scanner);
 			if (currentToken.m_Type == type)
 			{
-				data.CurrentToken++;
 				return currentToken;
 			}
 
@@ -1202,7 +1200,7 @@ namespace CppParser
 
 		//static Token GetCurrentToken(const ParserData& data)
 		//{
-		//	return AtEnd(data) ? data.Tokens[data.Tokens.size() - 1] : data.Tokens[data.CurrentToken];
+		//	return AtEnd(data) ? data.Tokens[data.Tokens.size() - 1] : data.Tokens[data.Scanner.Stream.Stream.Cursor];
 		//}
 
 		//static Token GetTokenAt(const ParserData& data, int index)
@@ -3606,7 +3604,7 @@ result->type = pType;
 			//data.Tokens.push(Token{ -1, -1, TokenType::PREPROCESSING_FILE_END, ParserString::CreateString(fileBeingParsed) });
 			//data.Tokens.push(Token{ -1, -1, TokenType::NEWLINE, ParserString::CreateString("\\n") });
 			Preprocess(fileBeingParsed, includeDirs, data);
-			data.CurrentToken = 0;
+			data.Scanner.Stream.Stream.Cursor = 0;
 			return ParseDeclarationSequence(data);
 		}
 
@@ -3631,7 +3629,7 @@ result->type = pType;
 				return GenerateGroupingNode(expression);
 			}
 
-			int backtrackPosition = data.CurrentToken;
+			int backtrackPosition = data.Scanner.Stream.Stream.Cursor;
 			AstNode* expr = ParseIdExpression(data);
 			if (expr->success)
 			{
@@ -3653,7 +3651,7 @@ result->type = pType;
 
 		static AstNode* ParseIdExpression(ParserData& data)
 		{
-			int backtrackPosition = data.CurrentToken;
+			int backtrackPosition = data.Scanner.Stream.Stream.Cursor;
 			AstNode* unqualifiedId = ParseUnqualifiedId(data);
 			if (unqualifiedId->success)
 			{
@@ -3680,7 +3678,7 @@ result->type = pType;
 				return GenerateUnqualifiedIdNode(ConsumeCurrent(data, TokenType::IDENTIFIER));
 			}
 
-			int backtrackPosition = data.CurrentToken;
+			int backtrackPosition = data.Scanner.Stream.Stream.Cursor;
 			if (Match(data, TokenType::TILDE))
 			{
 				AstNode* className = ParseClassName(data);
@@ -3737,7 +3735,7 @@ result->type = pType;
 
 		static AstNode* ParseQualifiedId(ParserData& data)
 		{
-			int backtrackPosition = data.CurrentToken;
+			int backtrackPosition = data.Scanner.Stream.Stream.Cursor;
 			bool hasNamespaceScope = Peek(data) == TokenType::COLON;
 			if (Peek(data) == TokenType::COLON)
 			{
@@ -3808,7 +3806,7 @@ result->type = pType;
 
 		static AstNode* ParseNestedNameSubSpecifier(ParserData& data)
 		{
-			int backtrackPosition = data.CurrentToken;
+			int backtrackPosition = data.Scanner.Stream.Stream.Cursor;
 			AstNode* typeName = ParseTypeName(data);
 			if (typeName->success)
 			{
@@ -3850,7 +3848,7 @@ result->type = pType;
 
 		static AstNode* ParseNestedNameSpecifier(ParserData& data)
 		{
-			int backtrackPosition = data.CurrentToken;
+			int backtrackPosition = data.Scanner.Stream.Stream.Cursor;
 			AstNode* nestedNameSubSpecifier = ParseNestedNameSubSpecifier(data);
 			if (nestedNameSubSpecifier->success)
 			{
@@ -3890,7 +3888,7 @@ result->type = pType;
 		// Lambdas
 		static AstNode* ParseLambdaExpression(ParserData& data)
 		{
-			int backtrackPosition = data.CurrentToken;
+			int backtrackPosition = data.Scanner.Stream.Stream.Cursor;
 			AstNode* lambdaIntroducer = ParseLambdaIntroducer(data);
 			if (!lambdaIntroducer->success)
 			{
@@ -3900,14 +3898,14 @@ result->type = pType;
 			}
 
 			// This is optional, so it's fine if it doesn't succeed
-			backtrackPosition = data.CurrentToken;
+			backtrackPosition = data.Scanner.Stream.Stream.Cursor;
 			AstNode* lambdaDeclarator = ParseLambdaDeclarator(data);
 			if (!lambdaDeclarator->success)
 			{
 				BacktrackTo(data, backtrackPosition);
 			}
 
-			backtrackPosition = data.CurrentToken;
+			backtrackPosition = data.Scanner.Stream.Stream.Cursor;
 			AstNode* compoundStatement = ParseCompoundStatement(data);
 			if (!compoundStatement->success)
 			{
@@ -3925,7 +3923,7 @@ result->type = pType;
 		{
 			if (Match(data, TokenType::LEFT_BRACKET))
 			{
-				int backtrackPosition = data.CurrentToken;
+				int backtrackPosition = data.Scanner.Stream.Stream.Cursor;
 				// Lambda capture is optional, so it's ok if it fails
 				AstNode* lambdaCapture = ParseLambdaCapture(data);
 				if (!lambdaCapture->success)
@@ -3982,7 +3980,7 @@ result->type = pType;
 
 		static AstNode* ParseCapture(ParserData& data)
 		{
-			int backtrackPosition = data.CurrentToken;
+			int backtrackPosition = data.Scanner.Stream.Stream.Cursor;
 			if (Match(data, TokenType::AND))
 			{
 				if (Peek(data) == TokenType::IDENTIFIER)
@@ -4016,7 +4014,7 @@ result->type = pType;
 
 				bool isMutable = Match(data, TokenType::KW_MUTABLE);
 
-				int backtrackPosition = data.CurrentToken;
+				int backtrackPosition = data.Scanner.Stream.Stream.Cursor;
 				AstNode* exceptionSpec = ParseExceptionSpecification(data);
 				if (!exceptionSpec->success)
 				{
@@ -4025,7 +4023,7 @@ result->type = pType;
 					BacktrackTo(data, backtrackPosition);
 				}
 
-				backtrackPosition = data.CurrentToken;
+				backtrackPosition = data.Scanner.Stream.Stream.Cursor;
 				AstNode* attributeSpecifierSeq = ParseAttributeSpecifierSequence(data);
 				if (!attributeSpecifierSeq->success)
 				{
@@ -4034,7 +4032,7 @@ result->type = pType;
 					BacktrackTo(data, backtrackPosition);
 				}
 
-				backtrackPosition = data.CurrentToken;
+				backtrackPosition = data.Scanner.Stream.Stream.Cursor;
 				AstNode* trailingReturnType = ParseTrailingReturnType(data);
 				if (!trailingReturnType->success)
 				{
@@ -4057,7 +4055,7 @@ result->type = pType;
 			// Try to look ahead and make sure we don't recurse further if it's not possible
 			bool shouldRecurse = LookAheadBeforeSemicolon(data, { TokenType::LEFT_BRACKET, TokenType::LEFT_PAREN, TokenType::DOT, TokenType::ARROW, TokenType::PLUS_PLUS, TokenType::MINUS_MINUS });
 
-			int backtrackPosition = data.CurrentToken;
+			int backtrackPosition = data.Scanner.Stream.Stream.Cursor;
 			AstNode* primaryExpression = ParsePrimaryExpression(data);
 			if (primaryExpression->success)
 			{
@@ -4161,7 +4159,7 @@ result->type = pType;
 			if (Match(data, TokenType::KW_TYPEID))
 			{
 				Consume(data, TokenType::LEFT_PAREN);
-				int backtrackPos2 = data.CurrentToken;
+				int backtrackPos2 = data.Scanner.Stream.Stream.Cursor;
 				AstNode* expression = ParseExpression(data);
 				if (expression->success)
 				{
@@ -4190,7 +4188,7 @@ result->type = pType;
 			AstNode* postfixExpression = ParsePostfixExpression(data);
 			if (Match(data, TokenType::LEFT_BRACKET))
 			{
-				int backtrackPosition2 = data.CurrentToken;
+				int backtrackPosition2 = data.Scanner.Stream.Stream.Cursor;
 				AstNode* expression = ParseExpression(data);
 				if (expression->success)
 				{
@@ -4232,7 +4230,7 @@ result->type = pType;
 					return GeneratePostfixMemberIdExpressionNode(postfixExpression, idExpression, hasTemplateKeyword, memberOp);
 				}
 
-				int backtrackPosition2 = data.CurrentToken;
+				int backtrackPosition2 = data.Scanner.Stream.Stream.Cursor;
 				AstNode* idExpression = ParseIdExpression(data);
 				if (idExpression->success)
 				{
@@ -4272,7 +4270,7 @@ result->type = pType;
 				return GeneratePseudoDestructorDecltypeNode(decltypeSpecifier);
 			}
 
-			int backtrackPosition = data.CurrentToken;
+			int backtrackPosition = data.Scanner.Stream.Stream.Cursor;
 			if (Match(data, TokenType::COLON))
 			{
 				Consume(data, TokenType::COLON);
@@ -4352,7 +4350,7 @@ result->type = pType;
 		// Unary Expressions
 		static AstNode* ParseUnaryExpression(ParserData& data)
 		{
-			int backtrackCursor = data.CurrentToken;
+			int backtrackCursor = data.Scanner.Stream.Stream.Cursor;
 			AstNode* postfix = ParsePostfixExpression(data);
 			if (postfix->success)
 			{
@@ -4427,7 +4425,7 @@ result->type = pType;
 		// New Expressions
 		static AstNode* ParseNewExpression(ParserData& data)
 		{
-			int backtrackPosition = data.CurrentToken;
+			int backtrackPosition = data.Scanner.Stream.Stream.Cursor;
 			if (Match(data, TokenType::COLON))
 			{
 				Consume(data, TokenType::COLON);
@@ -4467,7 +4465,7 @@ result->type = pType;
 
 		static AstNode* ParseNewPlacement(ParserData& data)
 		{
-			int backtrackPosition = data.CurrentToken;
+			int backtrackPosition = data.Scanner.Stream.Stream.Cursor;
 			if (Match(data, TokenType::LEFT_PAREN))
 			{
 				AstNode* expressionList = ParseExpressionList(data);
@@ -4487,7 +4485,7 @@ result->type = pType;
 
 		static AstNode* ParseNewTypeId(ParserData& data)
 		{
-			int backtrackPosition = data.CurrentToken;
+			int backtrackPosition = data.Scanner.Stream.Stream.Cursor;
 			AstNode* typeSpecifierSeq = ParseTypeSpecifierSequence(data);
 			if (!typeSpecifierSeq->success)
 			{
@@ -4503,7 +4501,7 @@ result->type = pType;
 
 		static AstNode* ParseNewDeclarator(ParserData& data)
 		{
-			int backtrackPosition = data.CurrentToken;
+			int backtrackPosition = data.Scanner.Stream.Stream.Cursor;
 			AstNode* noptrNewDeclarator = ParseNoptrNewDeclarator(data);
 			if (noptrNewDeclarator->success)
 			{
@@ -4528,7 +4526,7 @@ result->type = pType;
 		static AstNode* ParseNoptrNewDeclarator(ParserData& data)
 		{
 			// TODO: this recursion is crazy
-			int backtrackPosition = data.CurrentToken;
+			int backtrackPosition = data.Scanner.Stream.Stream.Cursor;
 			if (!Match(data, TokenType::LEFT_BRACKET))
 			{
 				return GenerateNoSuccessAstNode();
@@ -4624,7 +4622,7 @@ result->type = pType;
 		// Cast
 		static AstNode* ParseCastExpression(ParserData& data)
 		{
-			int backtrackPosition = data.CurrentToken;
+			int backtrackPosition = data.Scanner.Stream.Stream.Cursor;
 			if (Match(data, TokenType::LEFT_PAREN))
 			{
 				AstNode* typeId = ParseTypeId(data);
@@ -4816,7 +4814,7 @@ result->type = pType;
 
 		static AstNode* ParseAssignmentExpression(ParserData& data)
 		{
-			int backtrackPosition = data.CurrentToken;
+			int backtrackPosition = data.Scanner.Stream.Stream.Cursor;
 			AstNode* result = ParseConditionalExpression(data);
 
 			if (result->success)
@@ -4877,7 +4875,7 @@ result->type = pType;
 
 		static AstNode* ParseAlignmentExpression(ParserData& data)
 		{
-			int backtrackPosition = data.CurrentToken;
+			int backtrackPosition = data.Scanner.Stream.Stream.Cursor;
 			if (Peek(data) == TokenType::KW_ALIGN_OF)
 			{
 				Consume(data, TokenType::LEFT_PAREN);
@@ -4917,7 +4915,7 @@ result->type = pType;
 		// Statements
 		static AstNode* ParseStatement(ParserData& data)
 		{
-			int backtrackPosition = data.CurrentToken;
+			int backtrackPosition = data.Scanner.Stream.Stream.Cursor;
 			AstNode* labeledStatement = ParseLabeledStatement(data);
 			if (labeledStatement->success)
 			{
@@ -4936,7 +4934,7 @@ result->type = pType;
 
 			// This is optional
 			AstNode* attributeSpecifierSeq = ParseAttributeSpecifierSequence(data);
-			int backtrackPosition2 = data.CurrentToken;
+			int backtrackPosition2 = data.Scanner.Stream.Stream.Cursor;
 
 			AstNode* expressionStatement = ParseExpressionStatement(data);
 			if (expressionStatement->success)
@@ -4992,7 +4990,7 @@ result->type = pType;
 
 		static AstNode* ParseLabeledStatement(ParserData& data)
 		{
-			int backtrackPosition = data.CurrentToken;
+			int backtrackPosition = data.Scanner.Stream.Stream.Cursor;
 			// This is optional
 			AstNode* attributeSpecifierSeq = ParseAttributeSpecifierSequence(data);
 
@@ -5031,7 +5029,7 @@ result->type = pType;
 				return GenerateEmptyStatementNode();
 			}
 
-			int backtrackPosition = data.CurrentToken;
+			int backtrackPosition = data.Scanner.Stream.Stream.Cursor;
 			AstNode* expression = ParseExpression(data);
 			if (expression->success)
 			{
@@ -5059,7 +5057,7 @@ result->type = pType;
 
 		static AstNode* ParseStatementSequence(ParserData& data)
 		{
-			int backtrackPosition = data.CurrentToken;
+			int backtrackPosition = data.Scanner.Stream.Stream.Cursor;
 			AstNode* result = ParseStatement(data);
 			if (!result->success)
 			{
@@ -5071,7 +5069,7 @@ result->type = pType;
 			AstNode* nextStatement = nullptr;
 			do
 			{
-				backtrackPosition = data.CurrentToken;
+				backtrackPosition = data.Scanner.Stream.Stream.Cursor;
 				AstNode* nextStatement = ParseStatement(data);
 				result = GenerateStatementSequenceNode(result, nextStatement->success ? nextStatement : GenerateNoSuccessAstNode());
 			} while (nextStatement && nextStatement->success);
@@ -5114,7 +5112,7 @@ result->type = pType;
 
 		static AstNode* ParseCondition(ParserData& data)
 		{
-			int backtrackPosition = data.CurrentToken;
+			int backtrackPosition = data.Scanner.Stream.Stream.Cursor;
 			AstNode* expression = ParseExpression(data);
 			if (expression->success)
 			{
@@ -5172,7 +5170,7 @@ result->type = pType;
 			if (Match(data, TokenType::KW_FOR))
 			{
 				Consume(data, TokenType::LEFT_PAREN);
-				int backtrackPosition = data.CurrentToken;
+				int backtrackPosition = data.Scanner.Stream.Stream.Cursor;
 				AstNode* forInitStatement = ParseForInitStatement(data);
 				if (forInitStatement->success)
 				{
@@ -5203,7 +5201,7 @@ result->type = pType;
 
 		static AstNode* ParseForInitStatement(ParserData& data)
 		{
-			int backtrackPosition = data.CurrentToken;
+			int backtrackPosition = data.Scanner.Stream.Stream.Cursor;
 			AstNode* expressionStatement = ParseExpressionStatement(data);
 			if (expressionStatement->success)
 			{
@@ -5225,7 +5223,7 @@ result->type = pType;
 
 		static AstNode* ParseForRangeDeclaration(ParserData& data)
 		{
-			int backtrackPosition = data.CurrentToken;
+			int backtrackPosition = data.Scanner.Stream.Stream.Cursor;
 			// This is optional
 			AstNode* attributeSpecifierSeq = ParseAttributeSpecifierSequence(data);
 			AstNode* typeSpecifierSeq = ParseTypeSpecifierSequence(data);
@@ -5252,7 +5250,7 @@ result->type = pType;
 
 		static AstNode* ParseForRangeInitializer(ParserData& data)
 		{
-			int backtrackPosition = data.CurrentToken;
+			int backtrackPosition = data.Scanner.Stream.Stream.Cursor;
 			AstNode* expression = ParseExpression(data);
 			if (!expression->success)
 			{
@@ -5296,7 +5294,7 @@ result->type = pType;
 					return GenerateReturnNode(GenerateNoSuccessAstNode());
 				}
 
-				int backtrackPosition = data.CurrentToken;
+				int backtrackPosition = data.Scanner.Stream.Stream.Cursor;
 				AstNode* expression = ParseExpression(data);
 				if (expression->success)
 				{
@@ -5336,7 +5334,7 @@ result->type = pType;
 
 		static AstNode* ParseDeclarationSequence(ParserData& data)
 		{
-			int backtrackPosition = data.CurrentToken;
+			int backtrackPosition = data.Scanner.Stream.Stream.Cursor;
 			AstNode* result = ParseDeclaration(data);
 			if (!result->success)
 			{
@@ -5353,7 +5351,7 @@ result->type = pType;
 
 		static AstNode* ParseUSystemDeclaration(ParserData& data)
 		{
-			int backtrackPosition = data.CurrentToken;
+			int backtrackPosition = data.Scanner.Stream.Stream.Cursor;
 			if (Match(data, TokenType::USYSTEM))
 			{
 				Consume(data, TokenType::LEFT_PAREN);
@@ -5378,7 +5376,7 @@ result->type = pType;
 
 		static AstNode* ParseDeclaration(ParserData& data)
 		{
-			int backtrackPosition = data.CurrentToken;
+			int backtrackPosition = data.Scanner.Stream.Stream.Cursor;
 			AstNode* blockDeclaration = ParseBlockDeclaration(data);
 			if (blockDeclaration->success)
 			{
@@ -5464,7 +5462,7 @@ result->type = pType;
 
 		static AstNode* ParseBlockDeclaration(ParserData& data)
 		{
-			int backtrackPosition = data.CurrentToken;
+			int backtrackPosition = data.Scanner.Stream.Stream.Cursor;
 			AstNode* simpleDeclaration = ParseSimpleDeclaration(data);
 			if (simpleDeclaration->success)
 			{
@@ -5534,7 +5532,7 @@ result->type = pType;
 
 		static AstNode* ParseAliasDeclaration(ParserData& data)
 		{
-			int backtrackPosition = data.CurrentToken;
+			int backtrackPosition = data.Scanner.Stream.Stream.Cursor;
 			if (Match(data, TokenType::KW_USING))
 			{
 				if (Peek(data) == TokenType::IDENTIFIER)
@@ -5557,7 +5555,7 @@ result->type = pType;
 
 		static AstNode* ParseSimpleDeclaration(ParserData& data)
 		{
-			int backtrackPosition = data.CurrentToken;
+			int backtrackPosition = data.Scanner.Stream.Stream.Cursor;
 			// All optional
 			AstNode* attributeSpecifierSeq = ParseAttributeSpecifierSequence(data);
 			AstNode* declSpecifierSeq = ParseDeclarationSpecifierSequence(data);
@@ -5611,7 +5609,7 @@ result->type = pType;
 
 		static AstNode* ParseAttributeDeclaration(ParserData& data)
 		{
-			int backtrackPosition = data.CurrentToken;
+			int backtrackPosition = data.Scanner.Stream.Stream.Cursor;
 			AstNode* attributeSpecifierSeq = ParseAttributeSpecifierSequence(data);
 			if (!attributeSpecifierSeq->success)
 			{
@@ -5631,7 +5629,7 @@ result->type = pType;
 				return GenerateSimpleDeclSpecifierNode(ConsumeCurrent(data, Peek(data)));
 			}
 
-			int backtrackPosition = data.CurrentToken;
+			int backtrackPosition = data.Scanner.Stream.Stream.Cursor;
 			AstNode* storageClassSpecifier = ParseStorageClassSpecifier(data);
 			if (storageClassSpecifier->success)
 			{
@@ -5661,7 +5659,7 @@ result->type = pType;
 
 		static AstNode* ParseDeclarationSpecifierSequence(ParserData& data)
 		{
-			int backtrackPosition = data.CurrentToken;
+			int backtrackPosition = data.Scanner.Stream.Stream.Cursor;
 			AstNode* result = ParseDeclarationSpecifier(data);
 			if (!result->success)
 			{
@@ -5715,7 +5713,7 @@ result->type = pType;
 
 		static AstNode* ParseTypeSpecifier(ParserData& data)
 		{
-			int backtrackPosition = data.CurrentToken;
+			int backtrackPosition = data.Scanner.Stream.Stream.Cursor;
 			// TODO: Is this right?
 			if (PeekIn(data, { TokenType::KW_CLASS, TokenType::KW_UNION, TokenType::KW_STRUCT, TokenType::KW_ENUM }) &&
 				LookAheadBeforeSemicolon(data, { TokenType::LEFT_CURLY_BRACKET }))
@@ -5750,7 +5748,7 @@ result->type = pType;
 
 		static AstNode* ParseTrailingTypeSpecifier(ParserData& data)
 		{
-			int backtrackPosition = data.CurrentToken;
+			int backtrackPosition = data.Scanner.Stream.Stream.Cursor;
 			AstNode* simpleTypeSpecifier = ParseSimpleTypeSpecifier(data);
 			if (simpleTypeSpecifier->success)
 			{
@@ -5788,7 +5786,7 @@ result->type = pType;
 
 		static AstNode* ParseTypeSpecifierSequence(ParserData& data)
 		{
-			int backtrackPosition = data.CurrentToken;
+			int backtrackPosition = data.Scanner.Stream.Stream.Cursor;
 			AstNode* result = ParseTypeSpecifier(data);
 			if (!result->success)
 			{
@@ -5810,7 +5808,7 @@ result->type = pType;
 
 		static AstNode* ParseTrailingTypeSpecifierSequence(ParserData& data)
 		{
-			int backtrackPosition = data.CurrentToken;
+			int backtrackPosition = data.Scanner.Stream.Stream.Cursor;
 			AstNode* result = ParseTrailingTypeSpecifier(data);
 			if (!result->success)
 			{
@@ -5838,7 +5836,7 @@ result->type = pType;
 				return GenerateSimpleTypeTokenSpecNode(ConsumeCurrent(data, Peek(data)));
 			}
 
-			int backtrackPosition = data.CurrentToken;
+			int backtrackPosition = data.Scanner.Stream.Stream.Cursor;
 			AstNode* decltypeSpecifier = ParseDecltypeSpecifier(data);
 			if (decltypeSpecifier->success)
 			{
@@ -5889,7 +5887,7 @@ result->type = pType;
 
 		static AstNode* ParseTypeName(ParserData& data)
 		{
-			int backtrackPosition = data.CurrentToken;
+			int backtrackPosition = data.Scanner.Stream.Stream.Cursor;
 			AstNode* simpleTemplateId = ParseSimpleTemplateId(data);
 			if (simpleTemplateId->success)
 			{
@@ -5959,11 +5957,11 @@ result->type = pType;
 				return GenerateElaboratedSpecifierEnumNode(nestedNameSpecifier, identifier, hasScopeOp);
 			}
 
-			int backtrackPosition = data.CurrentToken;
+			int backtrackPosition = data.Scanner.Stream.Stream.Cursor;
 			AstNode* classKey = ParseClassKey(data);
 			if (classKey->success)
 			{
-				int backtrackPosition2 = data.CurrentToken;
+				int backtrackPosition2 = data.Scanner.Stream.Stream.Cursor;
 				bool hasScopeOp = Match(data, TokenType::COLON);
 				if (hasScopeOp)
 				{
@@ -6034,7 +6032,7 @@ result->type = pType;
 
 		static AstNode* ParseEnumSpecifier(ParserData& data)
 		{
-			int backtrackPosition = data.CurrentToken;
+			int backtrackPosition = data.Scanner.Stream.Stream.Cursor;
 			AstNode* enumHead = ParseEnumHead(data);
 			if (enumHead->success)
 			{
@@ -6058,7 +6056,7 @@ result->type = pType;
 
 		static AstNode* ParseEnumHead(ParserData& data)
 		{
-			int backtrackPosition = data.CurrentToken;
+			int backtrackPosition = data.Scanner.Stream.Stream.Cursor;
 			AstNode* enumKey = ParseEnumKey(data);
 			if (!enumKey->success)
 			{
@@ -6070,7 +6068,7 @@ result->type = pType;
 			// This is optional
 			AstNode* attributeSpecifierSequence = ParseAttributeSpecifierSequence(data);
 
-			backtrackPosition = data.CurrentToken;
+			backtrackPosition = data.Scanner.Stream.Stream.Cursor;
 			AstNode* nestedNameSpecifier = GenerateNoSuccessAstNode();
 			if (MatchBeforeSemicolon(data, TokenType::COLON, TokenType::COLON))
 			{
@@ -6102,7 +6100,7 @@ result->type = pType;
 
 		static AstNode* ParseOpaqueEnumDeclaration(ParserData& data)
 		{
-			int backtrackPosition = data.CurrentToken;
+			int backtrackPosition = data.Scanner.Stream.Stream.Cursor;
 			AstNode* enumKey = ParseEnumKey(data);
 			if (!enumKey->success)
 			{
@@ -6186,7 +6184,7 @@ result->type = pType;
 
 		static AstNode* ParseNamespaceDefinition(ParserData& data)
 		{
-			int backtrackPosition = data.CurrentToken;
+			int backtrackPosition = data.Scanner.Stream.Stream.Cursor;
 			AstNode* namedNamespaceDefinition = ParseNamedNamespaceDefinition(data);
 			if (namedNamespaceDefinition->success)
 			{
@@ -6208,7 +6206,7 @@ result->type = pType;
 
 		static AstNode* ParseNamedNamespaceDefinition(ParserData& data)
 		{
-			int backtrackPosition = data.CurrentToken;
+			int backtrackPosition = data.Scanner.Stream.Stream.Cursor;
 			bool isInline = Match(data, TokenType::KW_INLINE);
 			if (Match(data, TokenType::KW_NAMESPACE))
 			{
@@ -6231,7 +6229,7 @@ result->type = pType;
 
 		static AstNode* ParseUnnamedNamespaceDefinition(ParserData& data)
 		{
-			int backtrackPosition = data.CurrentToken;
+			int backtrackPosition = data.Scanner.Stream.Stream.Cursor;
 			bool isInline = Match(data, TokenType::KW_INLINE);
 			if (Match(data, TokenType::KW_NAMESPACE))
 			{
@@ -6253,7 +6251,7 @@ result->type = pType;
 
 		static AstNode* ParseNamespaceBody(ParserData& data)
 		{
-			int backtrackPosition = data.CurrentToken;
+			int backtrackPosition = data.Scanner.Stream.Stream.Cursor;
 			// Optional
 			AstNode* declarationSequence = ParseDeclarationSequence(data);
 			if (declarationSequence->success)
@@ -6269,7 +6267,7 @@ result->type = pType;
 		// Namespace alias
 		static AstNode* ParseNamespaceAliasDefinition(ParserData& data)
 		{
-			int backtrackPosition = data.CurrentToken;
+			int backtrackPosition = data.Scanner.Stream.Stream.Cursor;
 			if (Match(data, TokenType::KW_NAMESPACE))
 			{
 				Token identifier = ConsumeCurrent(data, TokenType::IDENTIFIER);
@@ -6290,7 +6288,7 @@ result->type = pType;
 
 		static AstNode* ParseQualifiedNamespaceSpecifier(ParserData& data)
 		{
-			int backtrackPosition = data.CurrentToken;
+			int backtrackPosition = data.Scanner.Stream.Stream.Cursor;
 
 			bool isNested = Match(data, TokenType::COLON);
 			if (isNested) Consume(data, TokenType::COLON);
@@ -6347,7 +6345,7 @@ result->type = pType;
 
 		static AstNode* ParseUsingDirective(ParserData& data)
 		{
-			int backtrackPosition = data.CurrentToken;
+			int backtrackPosition = data.Scanner.Stream.Stream.Cursor;
 
 			// Optional
 			AstNode* attributeSpecifierSeq = ParseAttributeSpecifierSequence(data);
@@ -6415,7 +6413,7 @@ result->type = pType;
 		// Attribute Specifiers
 		static AstNode* ParseAttributeSpecifierSequence(ParserData& data)
 		{
-			int backtrackPosition = data.CurrentToken;
+			int backtrackPosition = data.Scanner.Stream.Stream.Cursor;
 			AstNode* result = ParseAttributeSpecifier(data);
 			if (!result->success)
 			{
@@ -6449,7 +6447,7 @@ result->type = pType;
 			if (Match(data, TokenType::KW_ALIGN_AS))
 			{
 				Consume(data, TokenType::LEFT_PAREN);
-				int backtrackPosition = data.CurrentToken;
+				int backtrackPosition = data.Scanner.Stream.Stream.Cursor;
 				AstNode* typeId = ParseTypeId(data);
 				if (typeId->success)
 				{
@@ -6481,7 +6479,7 @@ result->type = pType;
 
 		static AstNode* ParseAttributeList(ParserData& data)
 		{
-			int backtrackPosition = data.CurrentToken;
+			int backtrackPosition = data.Scanner.Stream.Stream.Cursor;
 			AstNode* result = ParseAttribute(data);
 			if (!result->success)
 			{
@@ -6513,7 +6511,7 @@ result->type = pType;
 
 		static AstNode* ParseAttribute(ParserData& data)
 		{
-			int backtrackPosition = data.CurrentToken;
+			int backtrackPosition = data.Scanner.Stream.Stream.Cursor;
 			AstNode* attributeToken = ParseAttributeToken(data);
 			if (!attributeToken->success)
 			{
@@ -6561,7 +6559,7 @@ result->type = pType;
 
 		static AstNode* ParseBalancedTokenSequence(ParserData& data)
 		{
-			int backtrackPosition = data.CurrentToken;
+			int backtrackPosition = data.Scanner.Stream.Stream.Cursor;
 			AstNode* result = ParseBalancedToken(data);
 			if (!result->success)
 			{
@@ -6605,7 +6603,7 @@ result->type = pType;
 		// Declarations
 		static AstNode* ParseInitDeclaratorList(ParserData& data)
 		{
-			int backtrackPosition = data.CurrentToken;
+			int backtrackPosition = data.Scanner.Stream.Stream.Cursor;
 			AstNode* result = ParseInitDeclarator(data);
 			if (!result->success)
 			{
@@ -6622,7 +6620,7 @@ result->type = pType;
 
 		static AstNode* ParseInitDeclarator(ParserData& data)
 		{
-			int backtrackPosition = data.CurrentToken;
+			int backtrackPosition = data.Scanner.Stream.Stream.Cursor;
 			AstNode* declarator = ParseDeclarator(data);
 			if (!declarator->success)
 			{
@@ -6639,7 +6637,7 @@ result->type = pType;
 
 		static AstNode* ParseDeclarator(ParserData& data)
 		{
-			int backtrackPosition = data.CurrentToken;
+			int backtrackPosition = data.Scanner.Stream.Stream.Cursor;
 			AstNode* noPtrDeclarator = ParseNoPtrDeclarator(data);
 			if (noPtrDeclarator->success)
 			{
@@ -6668,7 +6666,7 @@ result->type = pType;
 
 		static AstNode* ParsePtrDeclarator(ParserData& data)
 		{
-			int backtrackPosition = data.CurrentToken;
+			int backtrackPosition = data.Scanner.Stream.Stream.Cursor;
 			AstNode* noPtrDeclarator = ParseNoPtrDeclarator(data);
 			if (noPtrDeclarator->success)
 			{
@@ -6695,7 +6693,7 @@ result->type = pType;
 
 		static AstNode* ParseNoPtrDeclarator(ParserData& data)
 		{
-			int backtrackPosition = data.CurrentToken;
+			int backtrackPosition = data.Scanner.Stream.Stream.Cursor;
 			AstNode* parametersAndQualifiers = ParseParametersAndQualifiers(data);
 			if (parametersAndQualifiers->success)
 			{
@@ -6761,7 +6759,7 @@ result->type = pType;
 
 		static AstNode* ParseTrailingReturnType(ParserData& data)
 		{
-			int backtrackPosition = data.CurrentToken;
+			int backtrackPosition = data.Scanner.Stream.Stream.Cursor;
 			if (Match(data, TokenType::ARROW))
 			{
 				AstNode* trailingTypeSpecifierSeq = ParseTrailingTypeSpecifierSequence(data);
@@ -6802,7 +6800,7 @@ result->type = pType;
 				return GenerateRefNode(ParseAttributeSpecifierSequence(data));
 			}
 
-			int backtrackPosition = data.CurrentToken;
+			int backtrackPosition = data.Scanner.Stream.Stream.Cursor;
 			if (Match(data, TokenType::COLON))
 			{
 				Consume(data, TokenType::COLON);
@@ -6831,7 +6829,7 @@ result->type = pType;
 
 		static AstNode* ParseCvQualifierSequence(ParserData& data)
 		{
-			int backtrackPosition = data.CurrentToken;
+			int backtrackPosition = data.Scanner.Stream.Stream.Cursor;
 			AstNode* result = ParseCvQualifier(data);
 			if (!result->success)
 			{
@@ -6884,7 +6882,7 @@ result->type = pType;
 				return ParseIdExpression(data);
 			}
 
-			int backtrackPosition = data.CurrentToken;
+			int backtrackPosition = data.Scanner.Stream.Stream.Cursor;
 			if (Match(data, TokenType::COLON))
 			{
 				Consume(data, TokenType::COLON);
@@ -6907,7 +6905,7 @@ result->type = pType;
 				return GenerateDeclaratorIdNode(nestedNameSpecifier, className);
 			}
 
-			backtrackPosition = data.CurrentToken;
+			backtrackPosition = data.Scanner.Stream.Stream.Cursor;
 			AstNode* idExpression = ParseIdExpression(data);
 			if (idExpression->success)
 			{
@@ -6938,7 +6936,7 @@ result->type = pType;
 		// dcl.name
 		static AstNode* ParseTypeId(ParserData& data)
 		{
-			int backtrackPosition = data.CurrentToken;
+			int backtrackPosition = data.Scanner.Stream.Stream.Cursor;
 			AstNode* typeSpecifierSequence = ParseTypeSpecifierSequence(data);
 			if (!typeSpecifierSequence->success)
 			{
@@ -6954,7 +6952,7 @@ result->type = pType;
 
 		static AstNode* ParseAbstractDeclarator(ParserData& data)
 		{
-			int backtrackPosition = data.CurrentToken;
+			int backtrackPosition = data.Scanner.Stream.Stream.Cursor;
 			if (Match(data, TokenType::DOT))
 			{
 				if (Match(data, TokenType::DOT))
@@ -6996,7 +6994,7 @@ result->type = pType;
 
 		static AstNode* ParsePtrAbstractDeclarator(ParserData& data)
 		{
-			int backtrackPosition = data.CurrentToken;
+			int backtrackPosition = data.Scanner.Stream.Stream.Cursor;
 			AstNode* ptrOperator = ParsePtrOperator(data);
 			if (ptrOperator->success)
 			{
@@ -7013,7 +7011,7 @@ result->type = pType;
 		static AstNode* ParseNoptrAbstractDeclarator(ParserData& data)
 		{
 			// TODO: Not sure if this will work right...?
-			int backtrackPosition = data.CurrentToken;
+			int backtrackPosition = data.Scanner.Stream.Stream.Cursor;
 			AstNode* ptrAbstractDeclarator = GenerateNoSuccessAstNode();
 			if (Match(data, TokenType::LEFT_PAREN))
 			{
@@ -7080,7 +7078,7 @@ result->type = pType;
 
 		static AstNode* ParseParameterDeclarationList(ParserData& data)
 		{
-			int backtrackPosition = data.CurrentToken;
+			int backtrackPosition = data.Scanner.Stream.Stream.Cursor;
 			AstNode* result = ParseParameterDeclaration(data);
 			if (!result->success)
 			{
@@ -7100,13 +7098,13 @@ result->type = pType;
 
 		static AstNode* ParseParameterDeclaration(ParserData& data)
 		{
-			int backtrackPosition = data.CurrentToken;
+			int backtrackPosition = data.Scanner.Stream.Stream.Cursor;
 			// Optional
 			AstNode* attributeSpecifierSeq = ParseAttributeSpecifierSequence(data);
 			AstNode* declSpecifierSeq = ParseDeclarationSpecifierSequence(data);
 			if (declSpecifierSeq->success)
 			{
-				int backtrackPosition2 = data.CurrentToken;
+				int backtrackPosition2 = data.Scanner.Stream.Stream.Cursor;
 				AstNode* declarator = ParseDeclarator(data);
 				if (declarator->success)
 				{
@@ -7161,7 +7159,7 @@ result->type = pType;
 		// Functions
 		static AstNode* ParseFunctionDefinition(ParserData& data)
 		{
-			int backtrackPosition = data.CurrentToken;
+			int backtrackPosition = data.Scanner.Stream.Stream.Cursor;
 			// Optional
 			AstNode* attributeSpecifierSeq = ParseAttributeSpecifierSequence(data);
 			AstNode* declSpecifierSeq = ParseDeclarationSpecifierSequence(data);
@@ -7212,7 +7210,7 @@ result->type = pType;
 
 		static AstNode* ParseFunctionBody(ParserData& data)
 		{
-			int backtrackPosition = data.CurrentToken;
+			int backtrackPosition = data.Scanner.Stream.Stream.Cursor;
 			AstNode* functionTryBlock = ParseFunctionTryBlock(data);
 			if (functionTryBlock->success)
 			{
@@ -7250,7 +7248,7 @@ result->type = pType;
 
 		static AstNode* ParseBraceOrEqualInitializer(ParserData& data)
 		{
-			int backtrackPosition = data.CurrentToken;
+			int backtrackPosition = data.Scanner.Stream.Stream.Cursor;
 			if (Match(data, TokenType::EQUAL))
 			{
 				AstNode* result = ParseInitializerClause(data);
@@ -7267,7 +7265,7 @@ result->type = pType;
 
 		static AstNode* ParseInitializerClause(ParserData& data)
 		{
-			int backtrackPosition = data.CurrentToken;
+			int backtrackPosition = data.Scanner.Stream.Stream.Cursor;
 			AstNode* bracedInitList = ParseBracedInitList(data);
 			if (bracedInitList->success)
 			{
@@ -7289,7 +7287,7 @@ result->type = pType;
 
 		static AstNode* ParseInitializerList(ParserData& data)
 		{
-			int backtrackPosition = data.CurrentToken;
+			int backtrackPosition = data.Scanner.Stream.Stream.Cursor;
 			AstNode* result = ParseInitializerClause(data);
 			if (!result->success)
 			{
@@ -7320,7 +7318,7 @@ result->type = pType;
 
 		static AstNode* ParseBracedInitList(ParserData& data)
 		{
-			int backtrackPosition = data.CurrentToken;
+			int backtrackPosition = data.Scanner.Stream.Stream.Cursor;
 			if (Match(data, TokenType::LEFT_CURLY_BRACKET))
 			{
 				AstNode* initializerList = ParseInitializerList(data);
@@ -7352,7 +7350,7 @@ result->type = pType;
 
 		static AstNode* ParseClassSpecifier(ParserData& data)
 		{
-			int backtrackPosition = data.CurrentToken;
+			int backtrackPosition = data.Scanner.Stream.Stream.Cursor;
 			AstNode* classHead = ParseClassHead(data);
 			if (!classHead->success)
 			{
@@ -7371,7 +7369,7 @@ result->type = pType;
 
 		static AstNode* ParseClassHead(ParserData& data)
 		{
-			int backtrackPosition = data.CurrentToken;
+			int backtrackPosition = data.Scanner.Stream.Stream.Cursor;
 			AstNode* classKey = ParseClassKey(data);
 			if (!classKey->success)
 			{
@@ -7383,7 +7381,7 @@ result->type = pType;
 			// Optional
 			AstNode* attributeSpecifierSeq = ParseAttributeSpecifierSequence(data);
 
-			backtrackPosition = data.CurrentToken;
+			backtrackPosition = data.Scanner.Stream.Stream.Cursor;
 			AstNode* classHeadName = ParseClassHeadName(data);
 			if (classHeadName->success)
 			{
@@ -7403,7 +7401,7 @@ result->type = pType;
 
 		static AstNode* ParseClassHeadName(ParserData& data)
 		{
-			int backtrackPosition = data.CurrentToken;
+			int backtrackPosition = data.Scanner.Stream.Stream.Cursor;
 			// Optional
 			AstNode* nestedNameSpecifier = GenerateNoSuccessAstNode();
 			if (MatchBeforeSemicolon(data, TokenType::COLON, TokenType::COLON))
@@ -7427,7 +7425,7 @@ result->type = pType;
 
 		static AstNode* ParseClassVirtSpecifierSequence(ParserData& data)
 		{
-			int backtrackPosition = data.CurrentToken;
+			int backtrackPosition = data.Scanner.Stream.Stream.Cursor;
 			AstNode* result = ParseClassVirtSpecifier(data);
 			if (!result->success)
 			{
@@ -7474,7 +7472,7 @@ result->type = pType;
 		// Class Members
 		static AstNode* ParseMemberSpecification(ParserData& data)
 		{
-			int backtrackPosition = data.CurrentToken;
+			int backtrackPosition = data.Scanner.Stream.Stream.Cursor;
 			AstNode* accessSpecifier = ParseAccessSpecifier(data);
 			if (accessSpecifier->success)
 			{
@@ -7502,7 +7500,7 @@ result->type = pType;
 		static AstNode* ParseMemberDeclaration(ParserData& data)
 		{
 			// TODO: Does this really work right...?
-			int backtrackPosition = data.CurrentToken;
+			int backtrackPosition = data.Scanner.Stream.Stream.Cursor;
 			AstNode* functionDefinition = ParseFunctionDefinition(data);
 			if (functionDefinition->success)
 			{
@@ -7562,7 +7560,7 @@ result->type = pType;
 
 		static AstNode* ParseMemberDeclaratorList(ParserData& data)
 		{
-			int backtrackPosition = data.CurrentToken;
+			int backtrackPosition = data.Scanner.Stream.Stream.Cursor;
 			AstNode* result = ParseMemberDeclarator(data);
 			if (!result->success)
 			{
@@ -7586,14 +7584,14 @@ result->type = pType;
 
 		static AstNode* ParseMemberDeclarator(ParserData& data)
 		{
-			int backtrackPosition = data.CurrentToken;
+			int backtrackPosition = data.Scanner.Stream.Stream.Cursor;
 			AstNode* declarator = ParseDeclarator(data);
 			if (declarator->success)
 			{
 				// Optional
 				AstNode* virtSpecifierSeq = ParseVirtSpecifierSequence(data);
 				// Also optional, but there's a chance we could be referring to a different node
-				int backtrackPosition2 = data.CurrentToken;
+				int backtrackPosition2 = data.Scanner.Stream.Stream.Cursor;
 				AstNode* pureSpecifier = ParsePureSpecifier(data);
 				if (pureSpecifier->success)
 				{
@@ -7643,7 +7641,7 @@ result->type = pType;
 
 		static AstNode* ParseVirtSpecifierSequence(ParserData& data)
 		{
-			int backtrackPosition = data.CurrentToken;
+			int backtrackPosition = data.Scanner.Stream.Stream.Cursor;
 			AstNode* result = ParseVirtSpecifier(data);
 			if (!result->success)
 			{
@@ -7678,7 +7676,7 @@ result->type = pType;
 
 		static AstNode* ParsePureSpecifier(ParserData& data)
 		{
-			int backtrackPosition = data.CurrentToken;
+			int backtrackPosition = data.Scanner.Stream.Stream.Cursor;
 			if (Match(data, TokenType::EQUAL))
 			{
 				if (Peek(data) == TokenType::INTEGER_LITERAL)
@@ -7708,7 +7706,7 @@ result->type = pType;
 
 		static AstNode* ParseBaseSpecifierList(ParserData& data)
 		{
-			int backtrackPosition = data.CurrentToken;
+			int backtrackPosition = data.Scanner.Stream.Stream.Cursor;
 			AstNode* result = ParseBaseSpecifier(data);
 			if (!result->success)
 			{
@@ -7735,12 +7733,12 @@ result->type = pType;
 		static AstNode* ParseBaseSpecifier(ParserData& data)
 		{
 			// TODO: this is weird, make sure I didn't goof up here
-			int backtrackPosition = data.CurrentToken;
+			int backtrackPosition = data.Scanner.Stream.Stream.Cursor;
 			// Optional
 			AstNode* attributeSpecifierSeq = ParseAttributeSpecifierSequence(data);
 			bool isVirtual = Match(data, TokenType::KW_VIRTUAL);
 
-			int backtrackPosition2 = data.CurrentToken;
+			int backtrackPosition2 = data.Scanner.Stream.Stream.Cursor;
 			AstNode* accessSpecifier = ParseAccessSpecifier(data);
 			if (!accessSpecifier->success)
 			{
@@ -7769,7 +7767,7 @@ result->type = pType;
 
 		static AstNode* ParseClassOrDecltype(ParserData& data)
 		{
-			int backtrackPosition = data.CurrentToken;
+			int backtrackPosition = data.Scanner.Stream.Stream.Cursor;
 			AstNode* decltypeSpecifier = ParseDecltypeSpecifier(data);
 			if (decltypeSpecifier->success)
 			{
@@ -7832,7 +7830,7 @@ result->type = pType;
 
 		static AstNode* ParseConversionTypeId(ParserData& data)
 		{
-			int backtrackPosition = data.CurrentToken;
+			int backtrackPosition = data.Scanner.Stream.Stream.Cursor;
 			AstNode* typeSpecifierSeq = ParseTypeSpecifierSequence(data);
 			if (!typeSpecifierSeq->success)
 			{
@@ -7848,7 +7846,7 @@ result->type = pType;
 
 		static AstNode* ParseConversionDeclarator(ParserData& data)
 		{
-			int backtrackPosition = data.CurrentToken;
+			int backtrackPosition = data.Scanner.Stream.Stream.Cursor;
 			AstNode* ptrOperator = ParsePtrOperator(data);
 			if (!ptrOperator->success)
 			{
@@ -7865,7 +7863,7 @@ result->type = pType;
 		// Class initializers
 		static AstNode* ParseCtorInitializer(ParserData& data)
 		{
-			int backtrackPosition = data.CurrentToken;
+			int backtrackPosition = data.Scanner.Stream.Stream.Cursor;
 			if (Match(data, TokenType::COLON))
 			{
 				AstNode* memInitializerList = ParseMemInitializerList(data);
@@ -7882,7 +7880,7 @@ result->type = pType;
 
 		static AstNode* ParseMemInitializerList(ParserData& data)
 		{
-			int backtrackPosition = data.CurrentToken;
+			int backtrackPosition = data.Scanner.Stream.Stream.Cursor;
 			AstNode* result = ParseMemInitializer(data);
 			if (!result->success)
 			{
@@ -7912,7 +7910,7 @@ result->type = pType;
 
 		static AstNode* ParseMemInitializer(ParserData& data)
 		{
-			int backtrackPosition = data.CurrentToken;
+			int backtrackPosition = data.Scanner.Stream.Stream.Cursor;
 			AstNode* memInitializerId = ParseMemInitializerId(data);
 			if (!memInitializerId->success)
 			{
@@ -7944,7 +7942,7 @@ result->type = pType;
 
 		static AstNode* ParseMemInitializerId(ParserData& data)
 		{
-			int backtrackPosition = data.CurrentToken;
+			int backtrackPosition = data.Scanner.Stream.Stream.Cursor;
 			AstNode* classOrDecltype = ParseClassOrDecltype(data);
 			if (classOrDecltype->success)
 			{
@@ -8095,7 +8093,7 @@ result->type = pType;
 		// Literal overrides
 		static AstNode* ParseLiteralOperatorId(ParserData& data)
 		{
-			int backtrackPosition = data.CurrentToken;
+			int backtrackPosition = data.Scanner.Stream.Stream.Cursor;
 			if (Match(data, TokenType::KW_OPERATOR))
 			{
 				if (Peek(data) == TokenType::STRING_LITERAL)
@@ -8117,7 +8115,7 @@ result->type = pType;
 		// Templates
 		static AstNode* ParseTemplateDeclaration(ParserData& data)
 		{
-			int backtrackPosition = data.CurrentToken;
+			int backtrackPosition = data.Scanner.Stream.Stream.Cursor;
 			if (Match(data, TokenType::KW_TEMPLATE))
 			{
 				Consume(data, TokenType::LEFT_ANGLE_BRACKET);
@@ -8141,7 +8139,7 @@ result->type = pType;
 
 		static AstNode* ParseTemplateParameterList(ParserData& data)
 		{
-			int backtrackPosition = data.CurrentToken;
+			int backtrackPosition = data.Scanner.Stream.Stream.Cursor;
 			AstNode* result = ParseTemplateParameter(data);
 			if (!result->success)
 			{
@@ -8160,7 +8158,7 @@ result->type = pType;
 
 		static AstNode* ParseTemplateParameter(ParserData& data)
 		{
-			int backtrackPosition = data.CurrentToken;
+			int backtrackPosition = data.Scanner.Stream.Stream.Cursor;
 			AstNode* typeParameter = ParseTypeParameter(data);
 			if (typeParameter->success)
 			{
@@ -8182,7 +8180,7 @@ result->type = pType;
 
 		static AstNode* ParseTypeParameter(ParserData& data)
 		{
-			int backtrackPosition = data.CurrentToken;
+			int backtrackPosition = data.Scanner.Stream.Stream.Cursor;
 			if (Match(data, TokenType::KW_TEMPLATE))
 			{
 				if (Match(data, TokenType::LEFT_ANGLE_BRACKET))
@@ -8271,7 +8269,7 @@ result->type = pType;
 
 		static AstNode* ParseSimpleTemplateId(ParserData& data)
 		{
-			int backtrackPosition = data.CurrentToken;
+			int backtrackPosition = data.Scanner.Stream.Stream.Cursor;
 			AstNode* templateName = ParseTemplateName(data);
 			if (templateName->success)
 			{
@@ -8293,7 +8291,7 @@ result->type = pType;
 
 		static AstNode* ParseTemplateId(ParserData& data)
 		{
-			int backtrackPosition = data.CurrentToken;
+			int backtrackPosition = data.Scanner.Stream.Stream.Cursor;
 			AstNode* simpleTemplateId = ParseSimpleTemplateId(data);
 			if (simpleTemplateId->success)
 			{
@@ -8359,7 +8357,7 @@ result->type = pType;
 
 		static AstNode* ParseTemplateArgument(ParserData& data)
 		{
-			int backtrackPosition = data.CurrentToken;
+			int backtrackPosition = data.Scanner.Stream.Stream.Cursor;
 			AstNode* idExpression = ParseIdExpression(data);
 			if (idExpression->success)
 			{
@@ -8389,7 +8387,7 @@ result->type = pType;
 
 		static AstNode* ParseTypenameSpecifier(ParserData& data)
 		{
-			int backtrackPosition = data.CurrentToken;
+			int backtrackPosition = data.Scanner.Stream.Stream.Cursor;
 			if (Match(data, TokenType::KW_TYPENAME))
 			{
 				if (Match(data, TokenType::COLON))
@@ -8427,7 +8425,7 @@ result->type = pType;
 
 		static AstNode* ParseExplicitInstantiation(ParserData& data)
 		{
-			int backtrackPosition = data.CurrentToken;
+			int backtrackPosition = data.Scanner.Stream.Stream.Cursor;
 			bool hasExternKeyword = Match(data, TokenType::KW_EXTERN);
 			if (Match(data, TokenType::KW_TEMPLATE))
 			{
@@ -8445,7 +8443,7 @@ result->type = pType;
 
 		static AstNode* ParseExplicitSpecialization(ParserData& data)
 		{
-			int backtrackPosition = data.CurrentToken;
+			int backtrackPosition = data.Scanner.Stream.Stream.Cursor;
 			if (Match(data, TokenType::KW_TEMPLATE))
 			{
 				Consume(data, TokenType::LEFT_ANGLE_BRACKET);
@@ -8465,7 +8463,7 @@ result->type = pType;
 		// Exceptions
 		static AstNode* ParseTryBlock(ParserData& data)
 		{
-			int backtrackPosition = data.CurrentToken;
+			int backtrackPosition = data.Scanner.Stream.Stream.Cursor;
 			if (Match(data, TokenType::KW_TRY))
 			{
 				AstNode* compoundStatement = ParseCompoundStatement(data);
@@ -8487,7 +8485,7 @@ result->type = pType;
 
 		static AstNode* ParseFunctionTryBlock(ParserData& data)
 		{
-			int backtrackPosition = data.CurrentToken;
+			int backtrackPosition = data.Scanner.Stream.Stream.Cursor;
 			if (Match(data, TokenType::KW_TRY))
 			{
 				// Optional
@@ -8512,7 +8510,7 @@ result->type = pType;
 
 		static AstNode* ParseHandlerSequence(ParserData& data)
 		{
-			int backtrackPosition = data.CurrentToken;
+			int backtrackPosition = data.Scanner.Stream.Stream.Cursor;
 			AstNode* result = ParseHandler(data);
 			if (!result->success)
 			{
@@ -8536,7 +8534,7 @@ result->type = pType;
 
 		static AstNode* ParseHandler(ParserData& data)
 		{
-			int backtrackPosition = data.CurrentToken;
+			int backtrackPosition = data.Scanner.Stream.Stream.Cursor;
 			if (Match(data, TokenType::KW_CATCH))
 			{
 				Consume(data, TokenType::LEFT_PAREN);
@@ -8560,13 +8558,13 @@ result->type = pType;
 
 		static AstNode* ParseExceptionDeclaration(ParserData& data)
 		{
-			int backtrackPosition = data.CurrentToken;
+			int backtrackPosition = data.Scanner.Stream.Stream.Cursor;
 			// Optional
 			AstNode* attributeSpecifierSeq = ParseAttributeSpecifierSequence(data);
 			AstNode* typeSpecifierSeq = ParseTypeSpecifierSequence(data);
 			if (typeSpecifierSeq->success)
 			{
-				int backtrackPosition2 = data.CurrentToken;
+				int backtrackPosition2 = data.Scanner.Stream.Stream.Cursor;
 				AstNode* declarator = ParseDeclarator(data);
 				if (declarator->success)
 				{
@@ -8600,7 +8598,7 @@ result->type = pType;
 
 		static AstNode* ParseExceptionSpecification(ParserData& data)
 		{
-			int backtrackPosition = data.CurrentToken;
+			int backtrackPosition = data.Scanner.Stream.Stream.Cursor;
 			AstNode* noexceptSpecification = ParseNoexceptSpecification(data);
 			if (noexceptSpecification->success)
 			{
@@ -8637,7 +8635,7 @@ result->type = pType;
 
 		static AstNode* ParseTypeIdList(ParserData& data)
 		{
-			int backtrackPosition = data.CurrentToken;
+			int backtrackPosition = data.Scanner.Stream.Stream.Cursor;
 			AstNode* result = ParseTypeId(data);
 			if (!result->success)
 			{
@@ -8662,7 +8660,7 @@ result->type = pType;
 
 		static AstNode* ParseNoexceptSpecification(ParserData& data)
 		{
-			int backtrackPosition = data.CurrentToken;
+			int backtrackPosition = data.Scanner.Stream.Stream.Cursor;
 			if (Match(data, TokenType::KW_NOEXCEPT))
 			{
 				if (Match(data, TokenType::LEFT_PAREN))
@@ -8816,8 +8814,8 @@ result->type = pType;
 		//{
 		//	if (tokens.size() > 0)
 		//	{
-		//		//auto currentPosition = data.Tokens.begin() + data.CurrentToken;
-		//		data.Tokens.insert(tokens.begin(), tokens.end(), data.CurrentToken);
+		//		//auto currentPosition = data.Tokens.begin() + data.Scanner.Stream.Stream.Cursor;
+		//		data.Tokens.insert(tokens.begin(), tokens.end(), data.Scanner.Stream.Stream.Cursor);
 		//	}
 		//}
 
@@ -8825,12 +8823,12 @@ result->type = pType;
 		//{
 		//	if (replacement.size() > 0)
 		//	{
-		//		auto currentPosition = data.Tokens.begin() + data.CurrentToken;
-		//		data.Tokens.insert(replacement.begin(), replacement.end(), data.CurrentToken);
+		//		auto currentPosition = data.Tokens.begin() + data.Scanner.Stream.Stream.Cursor;
+		//		data.Tokens.insert(replacement.begin(), replacement.end(), data.Scanner.Stream.Stream.Cursor);
 		//		int macroTokenLength = 0;
 		//		if (isFunctionMacro)
 		//		{
-		//			int tmpCursor = data.CurrentToken + replacement.size();
+		//			int tmpCursor = data.Scanner.Stream.Stream.Cursor + replacement.size();
 		//			int grouping = 0;
 		//			Logger::Assert(tmpCursor + 1 < data.Tokens.size() && data.Tokens[tmpCursor + 1].m_Type == TokenType::LEFT_PAREN, "Invalid function macro. Must begin with a '('");
 		//			while (tmpCursor < data.Tokens.size())
@@ -8853,11 +8851,11 @@ result->type = pType;
 		//		}
 
 		//		// Free the strings then remove the excess tokens
-		//		for (int i = data.CurrentToken + replacement.size(); i <= data.CurrentToken + replacement.size() + macroTokenLength; i++)
+		//		for (int i = data.Scanner.Stream.Stream.Cursor + replacement.size(); i <= data.Scanner.Stream.Stream.Cursor + replacement.size() + macroTokenLength; i++)
 		//		{
 		//			ParserString::FreeString(data.Tokens[i].m_Lexeme);
 		//		}
-		//		data.Tokens.removeRange(data.CurrentToken + replacement.size(), data.CurrentToken + replacement.size() + macroTokenLength);
+		//		data.Tokens.removeRange(data.Scanner.Stream.Stream.Cursor + replacement.size(), data.Scanner.Stream.Stream.Cursor + replacement.size() + macroTokenLength);
 		//	}
 		//}
 
@@ -8931,7 +8929,7 @@ result->type = pType;
 		//static void ExpandIncludes(const char* fileBeingParsed, const std::vector<std::filesystem::path>& includeDirs, ParserData& data, const char* fileToWriteTo)
 		//{
 		//	// Get all the #includes included
-		//	while (data.CurrentToken < tokensSize)
+		//	while (data.Scanner.Stream.Stream.Cursor < tokensSize)
 		//	{
 		//		if (GetCurrentToken(data).m_Type == TokenType::HASHTAG)
 		//		{
@@ -8961,18 +8959,18 @@ result->type = pType;
 		//				{
 		//					Logger::Warning("Unable to find file '%s'", file.m_Lexeme);
 		//				}
-		//				data.CurrentToken -= RemoveTokensAtLine(data, file.m_Line, fileBeingParsed);
-		//				data.CurrentToken = std::max(data.CurrentToken, 0);
+		//				data.Scanner.Stream.Stream.Cursor -= RemoveTokensAtLine(data, file.m_Line, fileBeingParsed);
+		//				data.Scanner.Stream.Stream.Cursor = std::max(data.Scanner.Stream.Stream.Cursor, 0);
 		//			}
 		//			else
 		//			{
-		//				data.CurrentToken++;
+		//				data.Scanner.Stream.Stream.Cursor++;
 		//			}
 		//			FreePreprocessingNode(includeFile);
 		//		}
 		//		else
 		//		{
-		//			data.CurrentToken++;
+		//			data.Scanner.Stream.Stream.Cursor++;
 		//		}
 		//	}
 		//}
@@ -9001,13 +8999,13 @@ result->type = pType;
 		//	WalkPreprocessingTree(preprocessedTree, &data, walkMacroDefineFunction, PreprocessingAstNodeType::MacroDefineFunction, false);
 		//	WalkPreprocessingTree(preprocessedTree, &data, walkMacroUndefine, PreprocessingAstNodeType::MacroUndef, false);
 
-		//	data.CurrentToken = 0;
-		//	while (data.CurrentToken < data.Tokens.size())
+		//	data.Scanner.Stream.Stream.Cursor = 0;
+		//	while (data.Scanner.Stream.Stream.Cursor < data.Tokens.size())
 		//	{
 		//		Token& token = GetCurrentToken(data);
 		//		if (GetCurrentToken(data).m_Type == TokenType::HASHTAG)
 		//		{
-		//			data.CurrentToken++;
+		//			data.Scanner.Stream.Stream.Cursor++;
 		//			// Skip all #define lines and #undef lines, that way we don't expand the macro early
 		//			if (GetCurrentToken(data).m_Type == TokenType::IDENTIFIER &&
 		//				(ParserString::Compare(GetCurrentToken(data).m_Lexeme, "undef") || ParserString::Compare(GetCurrentToken(data).m_Lexeme, "define")))
@@ -9015,25 +9013,25 @@ result->type = pType;
 		//				int currentLine = token.m_Line;
 		//				while (!AtEnd(data) && GetCurrentToken(data).m_Line == currentLine)
 		//				{
-		//					data.CurrentToken++;
+		//					data.Scanner.Stream.Stream.Cursor++;
 		//				}
 		//			}
 		//		}
 		//		else if (GetCurrentToken(data).m_Type == TokenType::IDENTIFIER && Symbols::IsSymbol(data.PreprocessingSymbolTable, token))
 		//		{
-		//			List<Token> replacement = Symbols::ExpandMacro(data.PreprocessingSymbolTable, data.CurrentToken, data.Tokens);
+		//			List<Token> replacement = Symbols::ExpandMacro(data.PreprocessingSymbolTable, data.Scanner.Stream.Stream.Cursor, data.Tokens);
 		//			if (replacement.size() > 0)
 		//			{
 		//				PasteReplacementListHere(data, replacement, Symbols::IsFunctionMacroDefine(data.PreprocessingSymbolTable, token));
 		//			}
 		//			else
 		//			{
-		//				data.CurrentToken++;
+		//				data.Scanner.Stream.Stream.Cursor++;
 		//			}
 		//		}
 		//		else
 		//		{
-		//			data.CurrentToken++;
+		//			data.Scanner.Stream.Stream.Cursor++;
 		//		}
 		//	}
 		//}
@@ -9091,7 +9089,7 @@ result->type = pType;
 
 		//static int FindIfBlockEnd(const ParserData& data, int startingFrom)
 		//{
-		//	int tmpCursor = data.CurrentToken;
+		//	int tmpCursor = data.Scanner.Stream.Stream.Cursor;
 		//	int level = 0;
 		//	while (tmpCursor < data.Tokens.size())
 		//	{
@@ -9128,7 +9126,7 @@ result->type = pType;
 
 		//static PreprocessIfBlockDTO FindNextElifBlock(const ParserData& data)
 		//{
-		//	int tmpCursor = data.CurrentToken;
+		//	int tmpCursor = data.Scanner.Stream.Stream.Cursor;
 		//	int level = 0;
 		//	while (tmpCursor < data.Tokens.size())
 		//	{
@@ -9176,7 +9174,7 @@ result->type = pType;
 
 		//static int FindNewlineFrom(const ParserData& data)
 		//{
-		//	int tmpCursor = data.CurrentToken;
+		//	int tmpCursor = data.Scanner.Stream.Stream.Cursor;
 		//	while (tmpCursor < data.Tokens.size())
 		//	{
 		//		Token token = GetCurrentToken(data);
@@ -9355,8 +9353,8 @@ result->type = pType;
 		//			return;
 		//		}
 
-		//		data.CurrentToken = ifBlockStart.tokenPosition;
-		//		int ifBlockBegin = data.CurrentToken;
+		//		data.Scanner.Stream.Stream.Cursor = ifBlockStart.tokenPosition;
+		//		int ifBlockBegin = data.Scanner.Stream.Stream.Cursor;
 		//		Consume(data, TokenType::HASHTAG);
 		//		Consume(data, Peek(data));
 		//		int keepMeStart = -1;
@@ -9369,12 +9367,12 @@ result->type = pType;
 		//			if (symbolDefined && ifBlockStart.type == PreprocessIfBlockType::IfDef)
 		//			{
 		//				// If the symbol is defined and we are in an ifdef block, this is the section we want to keep
-		//				keepMeStart = data.CurrentToken;
+		//				keepMeStart = data.Scanner.Stream.Stream.Cursor;
 		//				keepMeEnd = FindNextElifBlock(data).tokenPosition - 2;
 		//			}
 		//			else if (!symbolDefined && ifBlockStart.type == PreprocessIfBlockType::IfNDef)
 		//			{
-		//				keepMeStart = data.CurrentToken;
+		//				keepMeStart = data.Scanner.Stream.Stream.Cursor;
 		//				keepMeEnd = FindNextElifBlock(data).tokenPosition - 2;
 		//			}
 		//		}
@@ -9411,7 +9409,7 @@ result->type = pType;
 		//			PreprocessIfBlockDTO nextElifBlock = FindNextElifBlock(data);
 		//			while (nextElifBlock.tokenPosition != -1)
 		//			{
-		//				data.CurrentToken = nextElifBlock.tokenPosition + 1;
+		//				data.Scanner.Stream.Stream.Cursor = nextElifBlock.tokenPosition + 1;
 		//				bool evaluation = false;
 		//				if (nextElifBlock.type == PreprocessIfBlockType::Elif)
 		//				{
@@ -9430,7 +9428,7 @@ result->type = pType;
 
 		//				if (evaluation)
 		//				{
-		//					data.CurrentToken = nextElifBlock.tokenPosition + 1;
+		//					data.Scanner.Stream.Stream.Cursor = nextElifBlock.tokenPosition + 1;
 		//					keepMeStart = FindNewlineFrom(data);
 		//					keepMeEnd = FindNextElifBlock(data).tokenPosition - 2;
 		//					break;
@@ -9464,15 +9462,15 @@ result->type = pType;
 		//				data.Tokens.removeRange(ifBlockStart.tokenPosition, ifBlockEnd);
 		//			}
 		//		}
-		//		data.CurrentToken = ifBlockStart.tokenPosition;
-		//		ifBlockStart = FindIfBlockStart(data, data.CurrentToken);
+		//		data.Scanner.Stream.Stream.Cursor = ifBlockStart.tokenPosition;
+		//		ifBlockStart = FindIfBlockStart(data, data.Scanner.Stream.Stream.Cursor);
 		//	}
 		//}
 
 		static void Preprocess(const char* fileBeingParsed, const std::vector<std::filesystem::path>& includeDirs, ParserData& data)
 		{
 			// Get all the #includes included
-			data.CurrentToken = 0;
+			data.Scanner.Stream.Stream.Cursor = 0;
 			PreprocessingAstNode* tree = ParsePreprocessingFile(data);
 			FileIO::CloseFileStreamWrite(data.PreprocessOutputStream);
 			FreePreprocessingNode(tree);
@@ -9480,11 +9478,11 @@ result->type = pType;
 			//ScriptScanner::WriteTokensToFile(data.Tokens, "out.txt");
 
 			// Expand all macros
-			//data.CurrentToken = 0;
+			//data.Scanner.Stream.Stream.Cursor = 0;
 			//PreprocessingAstNode* preprocessedTree = ParsePreprocessingFile(data);
 			//ExpandDefineMacros(data, preprocessedTree);
 
-			//data.CurrentToken = 0;
+			//data.Scanner.Stream.Stream.Cursor = 0;
 			//CheckIfDefineBlocks(data, preprocessedTree);
 
 			//FreePreprocessingNode(preprocessedTree);
@@ -10031,7 +10029,16 @@ result->type = pType;
 			if (Peek(data) == TokenType::IDENTIFIER)
 			{
 				Token token = ConsumeCurrent(data, TokenType::IDENTIFIER);
-				Write(data, writeToPPFile, token);
+				if (Symbols::IsSymbol(data.PreprocessingSymbolTable, token))
+				{
+					const char* tokens = Symbols::ExpandMacro(data, token);
+					Write(data, writeToPPFile, tokens);
+					ParserString::FreeString(tokens);
+				}
+				else
+				{
+					Write(data, writeToPPFile, token);
+				}
 				Write(data, writeToPPFile, " ");
 				return GenerateIdentifierNode(token);
 			}
@@ -10090,7 +10097,7 @@ result->type = pType;
 					}
 
 					// Join tokens and erase invalid tokens, it's a mess
-					int tokenPos = data.CurrentToken;
+					int tokenPos = data.Scanner.Stream.Stream.Cursor;
 					Token token = ConsumeCurrent(data, Peek(data));
 					const char* oldStr = identifier.m_Lexeme;
 					identifier.m_Lexeme = ParserString::Join(identifier.m_Lexeme, token.m_Lexeme);
@@ -10159,8 +10166,8 @@ result->type = pType;
 					}
 
 					FileIO::WriteToStream(data.PreprocessOutputStream, token.m_Lexeme);
-					if (token.m_Type != TokenType::LEFT_CURLY_BRACKET && token.m_Type != TokenType::RIGHT_CURLY_BRACKET && token.m_Type != TokenType::LEFT_BRACKET && 
-						token.m_Type != TokenType::LEFT_PAREN && token.m_Type != TokenType::LEFT_ANGLE_BRACKET && 
+					if (token.m_Type != TokenType::LEFT_CURLY_BRACKET && token.m_Type != TokenType::RIGHT_CURLY_BRACKET && token.m_Type != TokenType::LEFT_BRACKET &&
+						token.m_Type != TokenType::LEFT_PAREN && token.m_Type != TokenType::LEFT_ANGLE_BRACKET &&
 						token.m_Type != TokenType::COLON && token.m_Type != TokenType::SEMICOLON && token.m_Type != TokenType::DOT && token.m_Type != TokenType::ARROW &&
 						token.m_Type != TokenType::TILDE && token.m_Type != TokenType::BANG && token.m_Type != TokenType::PLUS_PLUS && token.m_Type != TokenType::MINUS_MINUS)
 					{
