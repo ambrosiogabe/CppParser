@@ -79,6 +79,16 @@ namespace CppParser
 			return countingStream;
 		}
 
+		CountingFileStream CountingFileStreamReadFromString(const char* source)
+		{
+			FileStream stream = FileStreamReadFromString(source);
+			CountingFileStream countingStream;
+			countingStream.Line = 1;
+			countingStream.Column = 1;
+			countingStream.Stream = stream;
+			return countingStream;
+		}
+
 		void CloseCountingFileStreamRead(CountingFileStream& stream)
 		{
 			CloseFileStreamRead(stream.Stream);
@@ -167,6 +177,21 @@ namespace CppParser
 			return StreamAtEnd(stream.Stream);
 		}
 
+		FileStream FileStreamReadFromString(const char* source)
+		{
+			Logger::AssertCritical(source != nullptr, "Invalid file stream source");
+
+			FileStream res;
+			res.Type = StreamType::Read;
+			res.fp = nullptr;
+			res.ChunkStart = 0;
+			res.Cursor = 0;
+			res.Size = ParserString::StringLength(source);
+			res.Data = (char*)ParserString::CreateString(source);
+			res.Filepath = ParserString::CreateString("");
+			return res;
+		}
+
 		FileStream OpenFileStreamRead(const char* filepath)
 		{
 			Logger::AssertCritical(filepath != nullptr, "Invalid filepath. Filepath cannot be null.");
@@ -245,7 +270,7 @@ namespace CppParser
 			}
 
 			StreamReadChunk(file, 1);
-			Logger::AssertCritical(file.Cursor - file.ChunkStart >= 0 && file.Cursor - file.ChunkStart < STREAM_BUFFER_SIZE, "Invalid chunk cursor boundaries in file stream.");
+			Logger::AssertCritical(file.Cursor - file.ChunkStart >= 0 && file.Cursor - file.ChunkStart < STREAM_BUFFER_SIZE && file.Cursor <= file.Size, "Invalid chunk cursor boundaries in file stream. 273");
 
 			char c = file.Data[file.Cursor - file.ChunkStart];
 			file.Cursor++;
@@ -349,7 +374,11 @@ namespace CppParser
 		// Internal functions
 		static void StreamReadChunk(FileStream& file, int numBytesToRead, bool forceRead)
 		{
-			Logger::AssertCritical(file.Cursor - file.ChunkStart >= 0 && file.Cursor - file.ChunkStart < STREAM_BUFFER_SIZE, "Invalid chunk cursor boundaries in file stream.");
+			Logger::AssertCritical(file.Cursor - file.ChunkStart >= 0 && file.Cursor - file.ChunkStart < STREAM_BUFFER_SIZE && file.Cursor <= file.Size, "Invalid chunk cursor boundaries in file stream. 377");
+			if (!file.fp)
+			{
+				return;
+			}
 
 			// Only read file contents if the file cursor is out of bounds of our "view" of the file
 			if (forceRead || file.Cursor + numBytesToRead > file.ChunkStart + STREAM_BUFFER_SIZE || file.Cursor < file.ChunkStart)

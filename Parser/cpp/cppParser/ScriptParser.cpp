@@ -9469,25 +9469,10 @@ result->type = pType;
 
 		static void Preprocess(const char* fileBeingParsed, const std::vector<std::filesystem::path>& includeDirs, ParserData& data)
 		{
-			// Get all the #includes included
 			data.Scanner.Stream.Stream.Cursor = 0;
 			PreprocessingAstNode* tree = ParsePreprocessingFile(data);
 			FileIO::CloseFileStreamWrite(data.PreprocessOutputStream);
 			FreePreprocessingNode(tree);
-			//RemoveSpecialTokens(data);
-			//ScriptScanner::WriteTokensToFile(data.Tokens, "out.txt");
-
-			// Expand all macros
-			//data.Scanner.Stream.Stream.Cursor = 0;
-			//PreprocessingAstNode* preprocessedTree = ParsePreprocessingFile(data);
-			//ExpandDefineMacros(data, preprocessedTree);
-
-			//data.Scanner.Stream.Stream.Cursor = 0;
-			//CheckIfDefineBlocks(data, preprocessedTree);
-
-			//FreePreprocessingNode(preprocessedTree);
-			//ScriptScanner::WriteTokensToFile(data.Tokens, "out.txt");
-			//RemoveWhitespaceTokens(data);
 		}
 
 		static PreprocessingAstNode* ParsePreprocessingFile(ParserData& data)
@@ -10032,8 +10017,16 @@ result->type = pType;
 				if (Symbols::IsSymbol(data.PreprocessingSymbolTable, token))
 				{
 					const char* tokens = Symbols::ExpandMacro(data, token);
-					Write(data, writeToPPFile, tokens);
+					ScannerData backupScanner = data.Scanner;
+					ScannerData macroExpansionScanner = ScriptScanner::OpenScanner(CountingFileStream{
+							FileIO::CountingFileStreamReadFromString(tokens)
+						});
+					data.Scanner = macroExpansionScanner;
+					// This should write the tokens out to the file
+					ParsePPTokens(data, writeToPPFile, false);
+					ScriptScanner::CloseScanner(macroExpansionScanner);
 					ParserString::FreeString(tokens);
+					data.Scanner = backupScanner;
 				}
 				else
 				{
@@ -10165,14 +10158,15 @@ result->type = pType;
 						Write(data, true, "\n");
 					}
 
-					FileIO::WriteToStream(data.PreprocessOutputStream, token.m_Lexeme);
+					/*FileIO::WriteToStream(data.PreprocessOutputStream, token.m_Lexeme);
 					if (token.m_Type != TokenType::LEFT_CURLY_BRACKET && token.m_Type != TokenType::RIGHT_CURLY_BRACKET && token.m_Type != TokenType::LEFT_BRACKET &&
 						token.m_Type != TokenType::LEFT_PAREN && token.m_Type != TokenType::LEFT_ANGLE_BRACKET &&
 						token.m_Type != TokenType::COLON && token.m_Type != TokenType::SEMICOLON && token.m_Type != TokenType::DOT && token.m_Type != TokenType::ARROW &&
 						token.m_Type != TokenType::TILDE && token.m_Type != TokenType::BANG && token.m_Type != TokenType::PLUS_PLUS && token.m_Type != TokenType::MINUS_MINUS)
 					{
 						FileIO::WriteToStream(data.PreprocessOutputStream, " ");
-					}
+					}*/
+					ScriptScanner::AppendTokenToStream(data.PreprocessOutputStream, token);
 				}
 				return GeneratePreprocessingOpOrPuncNode(token);
 			}

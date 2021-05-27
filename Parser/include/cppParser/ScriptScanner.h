@@ -3,6 +3,7 @@
 #include "cppParser/CppTokens.h"
 #include "cppParser/FileIO.h"
 #include "CppUtils/CppUtils.h"
+#include "cppParser/ParserString.h"
 
 namespace CppParser
 {
@@ -17,6 +18,7 @@ namespace CppParser
 	{
 		using namespace CppUtils;
 		ScannerData OpenScanner(const char* filepath);
+		ScannerData OpenScanner(CountingFileStream stream);
 		void CloseScanner(ScannerData& scanner);
 
 		List<Token> ScanTokens(const char* filepath, bool includeWhitespace = false);
@@ -26,6 +28,8 @@ namespace CppParser
 		void DebugPrint(const List<Token>& tokens, bool printLineAndCol = true, bool printWhitespace = false);
 		void WriteTokensToFile(const List<Token>& tokens, const char* filename);
 		const char* TokenName(TokenType type);
+		void AppendTokenToStringBuilder(StringBuilder& sb, const Token& token);
+		void AppendTokenToStream(FileStream& stream, const Token& token);
 
 		void FreeTokens(List<Token>& tokens);
 

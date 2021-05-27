@@ -246,16 +246,7 @@ namespace CppParser
 			for (Token& token : replacementListResult)
 			{
 				token.m_Line = newLine;
-				if (token.m_Type == TokenType::STRING_LITERAL)
-				{
-					sb.Append("\"");
-					sb.Append(token.m_Lexeme);
-					sb.Append("\"");
-				}
-				else
-				{
-					sb.Append(token.m_Lexeme);
-				}
+				ScriptScanner::AppendTokenToStringBuilder(sb, token);
 			}
 
 			return sb.c_str_copy();
@@ -325,7 +316,7 @@ namespace CppParser
 					{
 						break;
 					}
-					sb.Append(token.m_Lexeme);
+					ScriptScanner::AppendTokenToStringBuilder(sb, token);
 				}
 				functionIdentifierReplacements.push(sb.c_str_copy());
 			}
@@ -357,16 +348,7 @@ namespace CppParser
 				}
 				else
 				{
-					if (token.m_Type == TokenType::STRING_LITERAL)
-					{
-						sb.Append("\"");
-						sb.Append(token.m_Lexeme);
-						sb.Append("\"");
-					}
-					else
-					{
-						sb.Append(token.m_Lexeme);
-					}
+					ScriptScanner::AppendTokenToStringBuilder(sb, token);
 				}
 			}
 

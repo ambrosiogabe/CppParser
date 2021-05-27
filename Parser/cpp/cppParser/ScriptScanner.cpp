@@ -442,6 +442,14 @@ namespace CppParser
 			return data;
 		}
 
+		ScannerData OpenScanner(CountingFileStream stream)
+		{
+			ScannerData data;
+			data.Stream = stream;
+			data.Start = 0;
+			return data;
+		}
+
 		void CloseScanner(ScannerData& scanner)
 		{
 			FileIO::CloseCountingFileStreamRead(scanner.Stream);
@@ -545,6 +553,40 @@ namespace CppParser
 					Logger::Assert(iter != tokenTypeToString.end(), "Invalid token while debug printing.");
 					Logger::Info("Line: %d:%d Token<%s>: %s", token->m_Line, token->m_Column, iter->second, token->m_Lexeme);
 				}
+			}
+		}
+
+		void AppendTokenToStringBuilder(StringBuilder& sb, const Token& token)
+		{
+			if (token.m_Type == TokenType::STRING_LITERAL)
+			{
+				sb.Append('"');
+				sb.Append(token.m_Lexeme);
+				sb.Append('"');
+			}
+			else
+			{
+				sb.Append(token.m_Lexeme);
+			}
+
+			if (token.m_Type != TokenType::LEFT_CURLY_BRACKET && token.m_Type != TokenType::RIGHT_CURLY_BRACKET && token.m_Type != TokenType::LEFT_BRACKET &&
+				token.m_Type != TokenType::LEFT_PAREN && token.m_Type != TokenType::LEFT_ANGLE_BRACKET &&
+				token.m_Type != TokenType::COLON && token.m_Type != TokenType::SEMICOLON && token.m_Type != TokenType::DOT && token.m_Type != TokenType::ARROW &&
+				token.m_Type != TokenType::TILDE && token.m_Type != TokenType::BANG && token.m_Type != TokenType::PLUS_PLUS && token.m_Type != TokenType::MINUS_MINUS)
+			{
+				sb.Append(' ');
+			}
+		}
+
+		void AppendTokenToStream(FileStream& stream, const Token& token)
+		{
+			FileIO::WriteToStream(stream, token.m_Lexeme);
+			if (token.m_Type != TokenType::LEFT_CURLY_BRACKET && token.m_Type != TokenType::RIGHT_CURLY_BRACKET && token.m_Type != TokenType::LEFT_BRACKET &&
+				token.m_Type != TokenType::LEFT_PAREN && token.m_Type != TokenType::LEFT_ANGLE_BRACKET &&
+				token.m_Type != TokenType::COLON && token.m_Type != TokenType::SEMICOLON && token.m_Type != TokenType::DOT && token.m_Type != TokenType::ARROW &&
+				token.m_Type != TokenType::TILDE && token.m_Type != TokenType::BANG && token.m_Type != TokenType::PLUS_PLUS && token.m_Type != TokenType::MINUS_MINUS)
+			{
+				FileIO::WriteToStream(stream, " ");
 			}
 		}
 

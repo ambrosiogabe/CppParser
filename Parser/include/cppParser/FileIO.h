@@ -37,6 +37,7 @@ namespace CppParser
 		void DefaultWriteFile(const char* filepath, const char* fileContents);
 
 		CountingFileStream OpenCountingFileStreamRead(const char* filepath);
+		CountingFileStream CountingFileStreamReadFromString(const char* source);
 		void CloseCountingFileStreamRead(CountingFileStream& stream);
 		char StreamReadChar(CountingFileStream& stream);
 		char StreamCharAt(const CountingFileStream& stream, int index);
@@ -46,6 +47,7 @@ namespace CppParser
 		bool StreamAtEnd(const CountingFileStream& stream);
 
 		FileStream OpenFileStreamRead(const char* filepath);
+		FileStream FileStreamReadFromString(const char* source);
 		void CloseFileStreamRead(FileStream& stream);
 		char StreamReadChar(FileStream& stream);
 		char StreamCharAt(const FileStream& stream, int index);
