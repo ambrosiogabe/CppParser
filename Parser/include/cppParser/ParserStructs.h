@@ -3,6 +3,9 @@
 #include "cppParser/Ast.h"
 #include "CppUtils/CppUtils.h"
 
+#include <list>
+#include <filesystem>
+
 namespace CppParser
 {
 	using namespace CppUtils;
@@ -32,6 +35,8 @@ namespace CppParser
 		PPSymbolTable PreprocessingSymbolTable;
 		ScannerData Scanner;
 		FileStream PreprocessOutputStream;
-		int indentLevel = 0;
+		int indentLevel;
+		const char* fileBeingParsed;
+		std::vector<std::filesystem::path> includeDirs;
 	};
 }

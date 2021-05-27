@@ -32,7 +32,10 @@ namespace CppParser
 				nullptr,
 				PPSymbolTable(),
 				ScriptScanner::OpenScanner(fileBeingParsed),
-				FileIO::OpenFileStreamWrite(preprocessOutputPath)
+				FileIO::OpenFileStreamWrite(preprocessOutputPath),
+				0,
+				fileBeingParsed,
+				includeDirs
 			};
 
 			if ((osDefinitions & (int)PredefinedMacros::Android) == (int)PredefinedMacros::Android)
@@ -8797,7 +8800,7 @@ result->type = pType;
 			return "";
 		}
 
-		static bool SeenFile(const std::filesystem::path& fileInQuestion, const std::vector<std::filesystem::path>& filesSeen)
+		static bool IncludedFile(const std::filesystem::path& fileInQuestion, const std::vector<std::filesystem::path>& filesSeen)
 		{
 			for (const std::filesystem::path& file : filesSeen)
 			{
@@ -8810,383 +8813,47 @@ result->type = pType;
 			return false;
 		}
 
-		//static void MergeTokensAtCurrentPosition(ParserData& data, const List<Token>& tokens)
-		//{
-		//	if (tokens.size() > 0)
-		//	{
-		//		//auto currentPosition = data.Tokens.begin() + data.Scanner.Stream.Stream.Cursor;
-		//		data.Tokens.insert(tokens.begin(), tokens.end(), data.Scanner.Stream.Stream.Cursor);
-		//	}
-		//}
+		static void ParseIncludeFileIfNeeded(PreprocessingAstNode* ppTokens, ParserData& data, bool writePPTokensToFile)
+		{
+			if (!writePPTokensToFile)
+			{
+				return;
+			}
 
-		//static void PasteReplacementListHere(ParserData& data, const List<Token>& replacement, bool isFunctionMacro)
-		//{
-		//	if (replacement.size() > 0)
-		//	{
-		//		auto currentPosition = data.Tokens.begin() + data.Scanner.Stream.Stream.Cursor;
-		//		data.Tokens.insert(replacement.begin(), replacement.end(), data.Scanner.Stream.Stream.Cursor);
-		//		int macroTokenLength = 0;
-		//		if (isFunctionMacro)
-		//		{
-		//			int tmpCursor = data.Scanner.Stream.Stream.Cursor + replacement.size();
-		//			int grouping = 0;
-		//			Logger::Assert(tmpCursor + 1 < data.Tokens.size() && data.Tokens[tmpCursor + 1].m_Type == TokenType::LEFT_PAREN, "Invalid function macro. Must begin with a '('");
-		//			while (tmpCursor < data.Tokens.size())
-		//			{
-		//				if (data.Tokens[tmpCursor].m_Type == TokenType::LEFT_PAREN)
-		//				{
-		//					grouping++;
-		//				}
-		//				else if (data.Tokens[tmpCursor].m_Type == TokenType::RIGHT_PAREN)
-		//				{
-		//					grouping--;
-		//					if (grouping <= 0)
-		//					{
-		//						break;
-		//					}
-		//				}
-		//				macroTokenLength++;
-		//				tmpCursor++;
-		//			}
-		//		}
+			PreprocessingAstNode* ppToken = ppTokens->ppTokens.preprocessingToken;
+			Token file;
+			if (ppToken->type == PreprocessingAstNodeType::HeaderName)
+			{
+				file = ppToken->headerName.identifier;
+			}
+			else
+			{
+				file = ppToken->headerNameString.stringLiteral;
+			}
 
-		//		// Free the strings then remove the excess tokens
-		//		for (int i = data.Scanner.Stream.Stream.Cursor + replacement.size(); i <= data.Scanner.Stream.Stream.Cursor + replacement.size() + macroTokenLength; i++)
-		//		{
-		//			ParserString::FreeString(data.Tokens[i].m_Lexeme);
-		//		}
-		//		data.Tokens.removeRange(data.Scanner.Stream.Stream.Cursor + replacement.size(), data.Scanner.Stream.Stream.Cursor + replacement.size() + macroTokenLength);
-		//	}
-		//}
+			std::filesystem::path absFile = SearchForFile(file, data.fileBeingParsed, data.includeDirs);
+			if (absFile != "" && !IncludedFile(absFile, FilesSeen))
+			{
+				FilesSeen.emplace_back(absFile);
+				ScannerData includeFileScanner = ScriptScanner::OpenScanner(absFile.string().c_str());
+				ScannerData backupScanner = data.Scanner;
+				const char* backupFile = data.fileBeingParsed;
 
-		//static int RemoveTokensAtLine(ParserData& data, int line, std::filesystem::path filepath)
-		//{
-		//	int numTokensRemoved = 0;
-		//	bool lookingInFile = false;
-		//	for (auto tokenIter = data.Tokens.begin(); tokenIter != data.Tokens.end();)
-		//	{
-		//		if (tokenIter->m_Type == TokenType::PREPROCESSING_FILE_BEGIN && std::filesystem::path(tokenIter->m_Lexeme) == filepath)
-		//		{
-		//			lookingInFile = true;
-		//		}
-		//		if (tokenIter->m_Type == TokenType::PREPROCESSING_FILE_END && std::filesystem::path(tokenIter->m_Lexeme) == filepath)
-		//		{
-		//			// We have hit the end of this file, time to return
-		//			return numTokensRemoved;
-		//		}
+				data.Scanner = includeFileScanner;
+				data.fileBeingParsed = ParserString::CreateString(absFile.string().c_str());
+				Logger::Info("Parsing included file %s", data.fileBeingParsed);
+				ParsePreprocessingFile(data);
+				ParserString::FreeString(data.fileBeingParsed);
+				ScriptScanner::CloseScanner(includeFileScanner);
 
-		//		if (lookingInFile && tokenIter->m_Line == line)
-		//		{
-		//			ParserString::FreeString(tokenIter->m_Lexeme);
-		//			tokenIter = data.Tokens.removeIter(tokenIter);
-		//			numTokensRemoved++;
-		//		}
-		//		else
-		//		{
-		//			tokenIter++;
-		//		}
-		//	}
-		//	return numTokensRemoved;
-		//}
-
-		//static void RemoveWhitespaceTokens(ParserData& data)
-		//{
-		//	for (auto tokenIter = data.Tokens.begin(); tokenIter != data.Tokens.end();)
-		//	{
-		//		if (tokenIter->m_Type == TokenType::WHITESPACE || tokenIter->m_Type == TokenType::NEWLINE || tokenIter->m_Type == TokenType::COMMENT)
-		//		{
-		//			ParserString::FreeString(tokenIter->m_Lexeme);
-		//			tokenIter = data.Tokens.removeIter(tokenIter);
-		//		}
-		//		else
-		//		{
-		//			tokenIter++;
-		//		}
-		//	}
-		//}
-
-		//static void RemoveSpecialTokens(ParserData& data)
-		//{
-		//	for (auto tokenIter = data.Tokens.begin(); tokenIter != data.Tokens.end();)
-		//	{
-		//		//if (tokenIter->m_Type == TokenType::PREPROCESSING_FILE_BEGIN || tokenIter->m_Type == TokenType::PREPROCESSING_FILE_END)
-		//		//{
-		//		//	ParserString::FreeString(tokenIter->m_Lexeme);
-		//		//	tokenIter = data.Tokens.removeIter(tokenIter);
-		//		//}
-		//		if (tokenIter->m_Type == TokenType::END_OF_FILE && tokenIter != data.Tokens.end() - 1)
-		//		{
-		//			ParserString::FreeString(tokenIter->m_Lexeme);
-		//			tokenIter = data.Tokens.removeIter(tokenIter);
-		//		}
-		//		else
-		//		{
-		//			tokenIter++;
-		//		}
-		//	}
-		//}
-
-		//static void ExpandIncludes(const char* fileBeingParsed, const std::vector<std::filesystem::path>& includeDirs, ParserData& data, const char* fileToWriteTo)
-		//{
-		//	// Get all the #includes included
-		//	while (data.Scanner.Stream.Stream.Cursor < tokensSize)
-		//	{
-		//		if (GetCurrentToken(data).m_Type == TokenType::HASHTAG)
-		//		{
-		//			PreprocessingAstNode* includeFile = ParseMacroInclude(data);
-		//			if (includeFile->success)
-		//			{
-		//				PreprocessingAstNode* ppToken = includeFile->macroInclude.ppTokens->ppTokens.preprocessingToken;
-		//				Token file;
-		//				if (ppToken->type == PreprocessingAstNodeType::HeaderName)
-		//				{
-		//					file = ppToken->headerName.identifier;
-		//				}
-		//				else
-		//				{
-		//					file = ppToken->headerNameString.stringLiteral;
-		//				}
-
-		//				std::filesystem::path absFile = SearchForFile(file, fileBeingParsed, includeDirs);
-		//				if (absFile != "" && !SeenFile(absFile, FilesSeen))
-		//				{
-		//					FilesSeen.emplace_back(absFile);
-		//					MergeTokensAtCurrentPosition(data, GetTokensInAbsoluteFile(absFile, includeDirs, data));
-		//					// The size of the tokens has just grown
-		//					tokensSize = data.Tokens.size();
-		//				}
-		//				if (absFile == "")
-		//				{
-		//					Logger::Warning("Unable to find file '%s'", file.m_Lexeme);
-		//				}
-		//				data.Scanner.Stream.Stream.Cursor -= RemoveTokensAtLine(data, file.m_Line, fileBeingParsed);
-		//				data.Scanner.Stream.Stream.Cursor = std::max(data.Scanner.Stream.Stream.Cursor, 0);
-		//			}
-		//			else
-		//			{
-		//				data.Scanner.Stream.Stream.Cursor++;
-		//			}
-		//			FreePreprocessingNode(includeFile);
-		//		}
-		//		else
-		//		{
-		//			data.Scanner.Stream.Stream.Cursor++;
-		//		}
-		//	}
-		//}
-
-		//static void walkSimpleMacroDefine(PreprocessingAstNode* node, void* userData)
-		//{
-		//	ParserData* data = (ParserData*)userData;
-		//	Symbols::AddDefineSymbol(data->PreprocessingSymbolTable, node->macroDefine.identifier, node->macroDefine.identifier.m_Line, node);
-		//}
-
-		//static void walkMacroDefineFunction(PreprocessingAstNode* node, void* userData)
-		//{
-		//	ParserData* data = (ParserData*)userData;
-		//	Symbols::AddDefineSymbol(data->PreprocessingSymbolTable, node->macroDefine.identifier, node->macroDefine.identifier.m_Line, node);
-		//}
-
-		//static void walkMacroUndefine(PreprocessingAstNode* node, void* userData)
-		//{
-		//	ParserData* data = (ParserData*)userData;
-		//	Symbols::AddUndefine(data->PreprocessingSymbolTable, node->macroUndef.identifier, node->macroUndef.identifier.m_Line);
-		//}
-
-		//static void ExpandDefineMacros(ParserData& data, PreprocessingAstNode* preprocessedTree)
-		//{
-		//	WalkPreprocessingTree(preprocessedTree, &data, walkSimpleMacroDefine, PreprocessingAstNodeType::MacroDefine, false);
-		//	WalkPreprocessingTree(preprocessedTree, &data, walkMacroDefineFunction, PreprocessingAstNodeType::MacroDefineFunction, false);
-		//	WalkPreprocessingTree(preprocessedTree, &data, walkMacroUndefine, PreprocessingAstNodeType::MacroUndef, false);
-
-		//	data.Scanner.Stream.Stream.Cursor = 0;
-		//	while (data.Scanner.Stream.Stream.Cursor < data.Tokens.size())
-		//	{
-		//		Token& token = GetCurrentToken(data);
-		//		if (GetCurrentToken(data).m_Type == TokenType::HASHTAG)
-		//		{
-		//			data.Scanner.Stream.Stream.Cursor++;
-		//			// Skip all #define lines and #undef lines, that way we don't expand the macro early
-		//			if (GetCurrentToken(data).m_Type == TokenType::IDENTIFIER &&
-		//				(ParserString::Compare(GetCurrentToken(data).m_Lexeme, "undef") || ParserString::Compare(GetCurrentToken(data).m_Lexeme, "define")))
-		//			{
-		//				int currentLine = token.m_Line;
-		//				while (!AtEnd(data) && GetCurrentToken(data).m_Line == currentLine)
-		//				{
-		//					data.Scanner.Stream.Stream.Cursor++;
-		//				}
-		//			}
-		//		}
-		//		else if (GetCurrentToken(data).m_Type == TokenType::IDENTIFIER && Symbols::IsSymbol(data.PreprocessingSymbolTable, token))
-		//		{
-		//			List<Token> replacement = Symbols::ExpandMacro(data.PreprocessingSymbolTable, data.Scanner.Stream.Stream.Cursor, data.Tokens);
-		//			if (replacement.size() > 0)
-		//			{
-		//				PasteReplacementListHere(data, replacement, Symbols::IsFunctionMacroDefine(data.PreprocessingSymbolTable, token));
-		//			}
-		//			else
-		//			{
-		//				data.Scanner.Stream.Stream.Cursor++;
-		//			}
-		//		}
-		//		else
-		//		{
-		//			data.Scanner.Stream.Stream.Cursor++;
-		//		}
-		//	}
-		//}
-
-		//enum class PreprocessIfBlockType
-		//{
-		//	None,
-		//	IfDef,
-		//	IfNDef,
-		//	If,
-		//	Else,
-		//	Elif,
-		//	Endif
-		//};
-
-		//struct PreprocessIfBlockDTO
-		//{
-		//	PreprocessIfBlockType type;
-		//	int tokenPosition;
-		//};
-
-		//static PreprocessIfBlockDTO FindIfBlockStart(const ParserData& data, int startingFrom)
-		//{
-		//	int tmpCursor = startingFrom;
-		//	while (tmpCursor < data.Tokens.size())
-		//	{
-		//		Token token = GetTokenAt(data, tmpCursor);
-		//		int macroBegin = tmpCursor;
-		//		if (GetTokenAt(data, tmpCursor).m_Type == TokenType::HASHTAG)
-		//		{
-		//			tmpCursor++;
-		//			Token identifier = GetTokenAt(data, tmpCursor);
-		//			if (identifier.m_Type == TokenType::IDENTIFIER)
-		//			{
-		//				if (ParserString::Compare(identifier.m_Lexeme, "ifdef"))
-		//				{
-		//					return { PreprocessIfBlockType::IfDef, macroBegin };
-		//				}
-		//				else if (ParserString::Compare(identifier.m_Lexeme, "ifndef"))
-		//				{
-		//					return { PreprocessIfBlockType::IfNDef, macroBegin };
-		//				}
-		//			}
-
-		//			if (GetTokenAt(data, tmpCursor).m_Type == TokenType::KW_IF)
-		//			{
-		//				return { PreprocessIfBlockType::If, macroBegin };
-		//			}
-		//		}
-		//		tmpCursor++;
-		//	}
-
-		//	return { PreprocessIfBlockType::None, -1 };
-		//}
-
-		//static int FindIfBlockEnd(const ParserData& data, int startingFrom)
-		//{
-		//	int tmpCursor = data.Scanner.Stream.Stream.Cursor;
-		//	int level = 0;
-		//	while (tmpCursor < data.Tokens.size())
-		//	{
-		//		Token token = GetCurrentToken(data);
-		//		if (GetTokenAt(data, tmpCursor).m_Type == TokenType::HASHTAG)
-		//		{
-		//			tmpCursor++;
-		//			Token identifier = GetTokenAt(data, tmpCursor);
-		//			if (identifier.m_Type == TokenType::IDENTIFIER)
-		//			{
-		//				if (ParserString::Compare(identifier.m_Lexeme, "endif"))
-		//				{
-		//					level--;
-		//					if (level <= 0)
-		//					{
-		//						return tmpCursor;
-		//					}
-		//				}
-		//				else if (ParserString::Compare(identifier.m_Lexeme, "ifdef") || ParserString::Compare(identifier.m_Lexeme, "ifndef"))
-		//				{
-		//					level++;
-		//				}
-		//			}
-		//			else if (identifier.m_Type == TokenType::KW_IF)
-		//			{
-		//				level++;
-		//			}
-		//		}
-		//		tmpCursor++;
-		//	}
-
-		//	return -1;
-		//}
-
-		//static PreprocessIfBlockDTO FindNextElifBlock(const ParserData& data)
-		//{
-		//	int tmpCursor = data.Scanner.Stream.Stream.Cursor;
-		//	int level = 0;
-		//	while (tmpCursor < data.Tokens.size())
-		//	{
-		//		Token token = GetCurrentToken(data);
-		//		if (GetTokenAt(data, tmpCursor).m_Type == TokenType::HASHTAG)
-		//		{
-		//			tmpCursor++;
-		//			Token identifier = GetTokenAt(data, tmpCursor);
-		//			if (identifier.m_Type == TokenType::IDENTIFIER)
-		//			{
-		//				if (ParserString::Compare(identifier.m_Lexeme, "endif"))
-		//				{
-		//					if (level <= 0)
-		//					{
-		//						return { PreprocessIfBlockType::Endif, tmpCursor };
-		//					}
-		//					level--;
-		//				}
-		//				else if (ParserString::Compare(identifier.m_Lexeme, "elif"))
-		//				{
-		//					if (level <= 0)
-		//					{
-		//						return { PreprocessIfBlockType::Elif, tmpCursor };
-		//					}
-		//				}
-		//				else if (ParserString::Compare(identifier.m_Lexeme, "ifdef") || ParserString::Compare(identifier.m_Lexeme, "ifndef"))
-		//				{
-		//					level++;
-		//				}
-		//			}
-		//			else if (identifier.m_Type == TokenType::KW_ELSE)
-		//			{
-		//				return { PreprocessIfBlockType::Else, tmpCursor };
-		//			}
-		//			else if (identifier.m_Type == TokenType::KW_IF)
-		//			{
-		//				level++;
-		//			}
-		//		}
-		//		tmpCursor++;
-		//	}
-
-		//	return { PreprocessIfBlockType::None, -1 };
-		//}
-
-		//static int FindNewlineFrom(const ParserData& data)
-		//{
-		//	int tmpCursor = data.Scanner.Stream.Stream.Cursor;
-		//	while (tmpCursor < data.Tokens.size())
-		//	{
-		//		Token token = GetCurrentToken(data);
-		//		if (GetTokenAt(data, tmpCursor).m_Type == TokenType::NEWLINE)
-		//		{
-		//			return tmpCursor;
-		//		}
-		//		tmpCursor++;
-		//	}
-
-		//	return -1;
-		//}
+				data.Scanner = backupScanner;
+				data.fileBeingParsed = backupFile;
+			}
+			if (absFile == "")
+			{
+				Logger::Warning("Unable to find file '%s'", file.m_Lexeme);
+			}
+		}
 
 		//static int EvaluateBooleanConstantExpression(AstNode* tree);
 		//static int EvaluateBooleanLiteralExpression(AstNode* tree)
@@ -9339,132 +9006,6 @@ result->type = pType;
 		//	int evaluation = EvaluateBooleanConstantExpression(expression->constantExpression.expression);
 		//	FreeNode(expression);
 		//	return evaluation;
-		//}
-
-		//static void CheckIfDefineBlocks(ParserData& data, PreprocessingAstNode* preprocessedTree)
-		//{
-		//	PreprocessIfBlockDTO ifBlockStart = FindIfBlockStart(data, 0);
-		//	while (ifBlockStart.tokenPosition >= 0)
-		//	{
-		//		int ifBlockEnd = FindIfBlockEnd(data, ifBlockStart.tokenPosition);
-		//		if (ifBlockEnd == -1)
-		//		{
-		//			Logger::Error("Invalid to #if-#endif type block. Must have an #endif for every #if, #ifdef, #ifndef");
-		//			return;
-		//		}
-
-		//		data.Scanner.Stream.Stream.Cursor = ifBlockStart.tokenPosition;
-		//		int ifBlockBegin = data.Scanner.Stream.Stream.Cursor;
-		//		Consume(data, TokenType::HASHTAG);
-		//		Consume(data, Peek(data));
-		//		int keepMeStart = -1;
-		//		int keepMeEnd = -1;
-		//		if (ifBlockStart.type == PreprocessIfBlockType::IfDef || ifBlockStart.type == PreprocessIfBlockType::IfNDef)
-		//		{
-		//			Logger::Info("We are inside an ifdef or ifndef block");
-		//			Token& symbol = ConsumeCurrent(data, TokenType::IDENTIFIER);
-		//			bool symbolDefined = Symbols::IsDefined(data.PreprocessingSymbolTable, symbol);
-		//			if (symbolDefined && ifBlockStart.type == PreprocessIfBlockType::IfDef)
-		//			{
-		//				// If the symbol is defined and we are in an ifdef block, this is the section we want to keep
-		//				keepMeStart = data.Scanner.Stream.Stream.Cursor;
-		//				keepMeEnd = FindNextElifBlock(data).tokenPosition - 2;
-		//			}
-		//			else if (!symbolDefined && ifBlockStart.type == PreprocessIfBlockType::IfNDef)
-		//			{
-		//				keepMeStart = data.Scanner.Stream.Stream.Cursor;
-		//				keepMeEnd = FindNextElifBlock(data).tokenPosition - 2;
-		//			}
-		//		}
-		//		else if (ifBlockStart.type == PreprocessIfBlockType::If)
-		//		{
-		//			bool evaluation = EvaluateConstantPreprocessorExpression(data);
-		//			keepMeStart = FindNewlineFrom(data);
-		//			keepMeEnd = FindNextElifBlock(data).tokenPosition - 2;
-		//		}
-		//		else
-		//		{
-		//			Logger::Error("Unknown #if block start.");
-		//		}
-
-		//		if (keepMeStart != -1 && keepMeEnd != -1)
-		//		{
-		//			for (int i = ifBlockBegin; i < keepMeStart; i++)
-		//			{
-		//				ParserString::FreeString(data.Tokens[i].m_Lexeme);
-		//			}
-		//			data.Tokens.removeRange(ifBlockBegin, keepMeStart - 1);
-		//			int sizeRemoved = keepMeStart - 1 - ifBlockBegin;
-		//			keepMeEnd -= sizeRemoved;
-		//			ifBlockEnd -= sizeRemoved;
-		//			for (int i = keepMeEnd; i <= ifBlockEnd; i++)
-		//			{
-		//				ParserString::FreeString(data.Tokens[i].m_Lexeme);
-		//			}
-		//			data.Tokens.removeRange(keepMeEnd, ifBlockEnd);
-		//		}
-		//		else
-		//		{
-		//			// We need to look for the appropraite elif block here, or the else block if everything fails
-		//			PreprocessIfBlockDTO nextElifBlock = FindNextElifBlock(data);
-		//			while (nextElifBlock.tokenPosition != -1)
-		//			{
-		//				data.Scanner.Stream.Stream.Cursor = nextElifBlock.tokenPosition + 1;
-		//				bool evaluation = false;
-		//				if (nextElifBlock.type == PreprocessIfBlockType::Elif)
-		//				{
-		//					evaluation = EvaluateConstantPreprocessorExpression(data);
-		//				}
-		//				else if (nextElifBlock.type == PreprocessIfBlockType::Else)
-		//				{
-		//					evaluation = true;
-		//				}
-		//				else if (nextElifBlock.type == PreprocessIfBlockType::Endif)
-		//				{
-		//					keepMeStart = -1;
-		//					keepMeEnd = -1;
-		//					break;
-		//				}
-
-		//				if (evaluation)
-		//				{
-		//					data.Scanner.Stream.Stream.Cursor = nextElifBlock.tokenPosition + 1;
-		//					keepMeStart = FindNewlineFrom(data);
-		//					keepMeEnd = FindNextElifBlock(data).tokenPosition - 2;
-		//					break;
-		//				}
-		//				nextElifBlock = FindNextElifBlock(data);
-		//			}
-
-		//			if (keepMeStart != -1 && keepMeEnd != -1)
-		//			{
-		//				for (int i = ifBlockBegin; i <= keepMeStart; i++)
-		//				{
-		//					ParserString::FreeString(data.Tokens[i].m_Lexeme);
-		//				}
-		//				data.Tokens.removeRange(ifBlockBegin, keepMeStart);
-		//				int sizeRemoved = keepMeStart - ifBlockBegin;
-		//				keepMeEnd -= sizeRemoved;
-		//				ifBlockEnd -= sizeRemoved;
-		//				for (int i = keepMeEnd; i <= ifBlockEnd; i++)
-		//				{
-		//					ParserString::FreeString(data.Tokens[i].m_Lexeme);
-		//				}
-		//				data.Tokens.removeRange(keepMeEnd, ifBlockEnd);
-		//			}
-		//			else
-		//			{
-		//				// If none of the evaluations passed, just remove all the tokens in this #if-#endif block
-		//				for (int i = ifBlockStart.tokenPosition; i <= ifBlockEnd; i++)
-		//				{
-		//					ParserString::FreeString(data.Tokens[i].m_Lexeme);
-		//				}
-		//				data.Tokens.removeRange(ifBlockStart.tokenPosition, ifBlockEnd);
-		//			}
-		//		}
-		//		data.Scanner.Stream.Stream.Cursor = ifBlockStart.tokenPosition;
-		//		ifBlockStart = FindIfBlockStart(data, data.Scanner.Stream.Stream.Cursor);
-		//	}
 		//}
 
 		static void Preprocess(const char* fileBeingParsed, const std::vector<std::filesystem::path>& includeDirs, ParserData& data)
@@ -9747,7 +9288,7 @@ result->type = pType;
 						PreprocessingAstNode* ppTokens = ParsePPTokens(data, false, true);
 						if (ppTokens->success)
 						{
-							// TODO: Parse included file here
+							ParseIncludeFileIfNeeded(ppTokens, data, writeToPPFile);
 							Consume(data, TokenType::NEWLINE);
 							return GenerateMacroIncludeNode(ppTokens);
 						}

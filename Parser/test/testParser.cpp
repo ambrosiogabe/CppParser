@@ -1,6 +1,8 @@
 #ifndef TEST_PARSER_CPP
 #define TEST_PARSER_CPP
 
+#include <list>
+
 // #include <vector>
 #define MACRO_MAGIC           \
 	printf("Macro magic!\n"); \
