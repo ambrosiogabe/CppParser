@@ -1108,9 +1108,9 @@ namespace CppParser
 			return ScriptScanner::AtEnd(data.Scanner);
 		}
 
-		static void ErrorAtToken(ParserData& data, Token& currentToken)
+		static void ErrorAtToken(const ParserData& data, Token& currentToken)
 		{
-			Logger::Error("Unexpected token '%s' at line %d:%d", ScriptScanner::TokenName(currentToken.m_Type), currentToken.m_Line, currentToken.m_Column);
+			Logger::Error("Unexpected token '%s':'%s' at line %d:%d", ScriptScanner::TokenName(currentToken.m_Type), currentToken.m_Lexeme, currentToken.m_Line, currentToken.m_Column);
 		}
 
 		static void Consume(ParserData& data, TokenType type)
@@ -1121,8 +1121,8 @@ namespace CppParser
 				return;
 			}
 
-			Logger::Error("Unexpected token. Expected '%s' instead got '%s' at line: %d:%d", ScriptScanner::TokenName(type),
-				ScriptScanner::TokenName(currentToken.m_Type), currentToken.m_Line, currentToken.m_Column);
+			Logger::Error("Unexpected token. Expected '%s' instead got '%s':'%s' at line: %d:%d", ScriptScanner::TokenName(type),
+				ScriptScanner::TokenName(currentToken.m_Type), currentToken.m_Lexeme, currentToken.m_Line, currentToken.m_Column);
 		}
 
 		static void BacktrackTo(ParserData& data, int position)
@@ -1185,6 +1185,25 @@ namespace CppParser
 			return false;
 		}
 
+		static bool MatchNoPrecedingWhitespace(ParserData& data, TokenType type)
+		{
+			if (AtEnd(data))
+			{
+				return false;
+			}
+			int backtrackPosition = data.Scanner.Stream.Stream.Cursor;
+			Token currentToken = ScriptScanner::ScanToken(data.Scanner, true);
+			if (currentToken.m_Type == type)
+			{
+				// We aren't concerned with the lexeme here, so just free the result
+				ParserString::FreeString(currentToken.m_Lexeme);
+				return true;
+			}
+			BacktrackTo(data, backtrackPosition);
+
+			return false;
+		}
+
 		static Token ConsumeCurrent(ParserData& data, TokenType type)
 		{
 			Token currentToken = ScriptScanner::ScanToken(data.Scanner);
@@ -1193,23 +1212,14 @@ namespace CppParser
 				return currentToken;
 			}
 
-			Logger::Error("Unexpected token. Expected '%s' instead got '%s' at line %d:%d",
+			Logger::Error("Unexpected token. Expected '%s' instead got '%s':'%s' at line %d:%d",
 				ScriptScanner::TokenName(type),
 				ScriptScanner::TokenName(currentToken.m_Type),
+				currentToken.m_Lexeme,
 				currentToken.m_Line,
 				currentToken.m_Column);
 			return currentToken;
 		}
-
-		//static Token GetCurrentToken(const ParserData& data)
-		//{
-		//	return AtEnd(data) ? data.Tokens[data.Tokens.size() - 1] : data.Tokens[data.Scanner.Stream.Stream.Cursor];
-		//}
-
-		//static Token GetTokenAt(const ParserData& data, int index)
-		//{
-		//	return index >= data.Tokens.size() ? data.Tokens[data.Tokens.size() - 1] : data.Tokens[index];
-		//}
 
 		static bool IsAssignmentOperator(TokenType type)
 		{
@@ -1218,7 +1228,7 @@ namespace CppParser
 				type == TokenType::AND_EQUAL || type == TokenType::CARET_EQUAL || type == TokenType::PIPE_EQUAL;
 		}
 
-		static TokenType Peek(ParserData& data)
+		static TokenType Peek(const ParserData& data)
 		{
 			return ScriptScanner::PeekToken(data.Scanner);
 		}
@@ -1268,7 +1278,7 @@ namespace CppParser
 			while (!AtEnd(data))
 			{
 				Token token = ScriptScanner::ScanToken(data.Scanner);
-				if (token.m_Type == TokenType::SEMICOLON)
+				if (token.m_Type == TokenType::SEMICOLON || token.m_Type == TokenType::NEWLINE)
 				{
 					break;
 				}
@@ -3296,9 +3306,9 @@ result->type = pType;
 		static AstNode* ParseTranslationUnit(const char* fileBeingParsed, std::vector<std::filesystem::path>& includeDirs, ParserData& data);
 
 		// Expressions
-		static AstNode* ParsePrimaryExpression(ParserData& data);
-		static AstNode* ParseIdExpression(ParserData& data);
-		static AstNode* ParseUnqualifiedId(ParserData& data);
+		static AstNode* ParsePrimaryExpression(ParserData& data, int* evaluation = nullptr);
+		static AstNode* ParseIdExpression(ParserData& data, int* evaluation = nullptr);
+		static AstNode* ParseUnqualifiedId(ParserData& data, int* evaluation = nullptr);
 		static AstNode* ParseQualifiedId(ParserData& data);
 		static AstNode* ParseNestedNameSpecifier(ParserData& data);
 
@@ -3311,12 +3321,12 @@ result->type = pType;
 		static AstNode* ParseLambdaDeclarator(ParserData& data);
 
 		// Postfix Expressions
-		static AstNode* ParsePostfixExpression(ParserData& data);
+		static AstNode* ParsePostfixExpression(ParserData& data, int* evaluation = nullptr);
 		static AstNode* ParseExpressionList(ParserData& data);
 		static AstNode* ParsePseudoDestructorName(ParserData& data);
 
 		// Unary Expressions
-		static AstNode* ParseUnaryExpression(ParserData& data);
+		static AstNode* ParseUnaryExpression(ParserData& data, int* evaluation = nullptr);
 
 		// New Expressions
 		static AstNode* ParseNewExpression(ParserData& data);
@@ -3333,34 +3343,34 @@ result->type = pType;
 		static AstNode* ParseNoexceptExpression(ParserData& data);
 
 		// Cast
-		static AstNode* ParseCastExpression(ParserData& data);
+		static AstNode* ParseCastExpression(ParserData& data, int* evaluation = nullptr);
 
 		// Pointer to member
-		static AstNode* ParsePmExpression(ParserData& data);
+		static AstNode* ParsePmExpression(ParserData& data, int* evaluation = nullptr);
 
 		// Primary operations
-		static AstNode* ParseMultiplicativeExpression(ParserData& data);
-		static AstNode* ParseAdditiveExpression(ParserData& data);
-		static AstNode* ParseShiftExpression(ParserData& data);
+		static AstNode* ParseMultiplicativeExpression(ParserData& data, int* evaluation = nullptr);
+		static AstNode* ParseAdditiveExpression(ParserData& data, int* evaluation = nullptr);
+		static AstNode* ParseShiftExpression(ParserData& data, int* evaluation = nullptr);
 
 		// Comparision operations
-		static AstNode* ParseRelationalExpression(ParserData& data);
-		static AstNode* ParseEqualityExpression(ParserData& data);
-		static AstNode* ParseAndExpression(ParserData& data);
+		static AstNode* ParseRelationalExpression(ParserData& data, int* evaluation = nullptr);
+		static AstNode* ParseEqualityExpression(ParserData& data, int* evaluation = nullptr);
+		static AstNode* ParseAndExpression(ParserData& data, int* evaluation = nullptr);
 
 		// Logical operations
-		static AstNode* ParseExclusiveOrExpression(ParserData& data);
-		static AstNode* ParseInclusiveOrExpression(ParserData& data);
-		static AstNode* ParseLogicalAndExpression(ParserData& data);
-		static AstNode* ParseLogicalOrExpression(ParserData& data);
+		static AstNode* ParseExclusiveOrExpression(ParserData& data, int* evaluation = nullptr);
+		static AstNode* ParseInclusiveOrExpression(ParserData& data, int* evaluation = nullptr);
+		static AstNode* ParseLogicalAndExpression(ParserData& data, int* evaluation = nullptr);
+		static AstNode* ParseLogicalOrExpression(ParserData& data, int* evaluation = nullptr);
 
 		// Misc expressions
-		static AstNode* ParseConditionalExpression(ParserData& data);
-		static AstNode* ParseAssignmentExpression(ParserData& data);
-		static AstNode* ParseAlignmentExpression(ParserData& data);
+		static AstNode* ParseConditionalExpression(ParserData& data, int* evaluation = nullptr);
+		static AstNode* ParseAssignmentExpression(ParserData& data, int* evaluation = nullptr);
+		static AstNode* ParseAlignmentExpression(ParserData& data, int* evaluation = nullptr);
 
-		static AstNode* ParseExpression(ParserData& data);
-		static AstNode* ParseConstantExpression(ParserData& data);
+		static AstNode* ParseExpression(ParserData& data, int* evaluation = nullptr);
+		static AstNode* ParseConstantExpression(ParserData& data, int* evaluation = nullptr);
 
 		// Statements
 		static AstNode* ParseStatement(ParserData& data);
@@ -3612,12 +3622,39 @@ result->type = pType;
 		}
 
 		// Expressions
-		static AstNode* ParsePrimaryExpression(ParserData& data)
+		static AstNode* ParsePrimaryExpression(ParserData& data, int* evaluation)
 		{
 			if (PeekIn(data, { TokenType::CHARACTER_LITERAL, TokenType::FLOATING_POINT_LITERAL, TokenType::INTEGER_LITERAL, TokenType::STRING_LITERAL,
 				TokenType::KW_TRUE, TokenType::KW_FALSE }))
 			{
-				return GenerateLiteralNode(ConsumeCurrent(data, Peek(data)));
+				Token token = ConsumeCurrent(data, Peek(data));
+				if (evaluation)
+				{
+					switch (token.m_Type)
+					{
+					case TokenType::CHARACTER_LITERAL:
+						*evaluation = (int)token.m_Lexeme[0];
+						break;
+					case TokenType::FLOATING_POINT_LITERAL:
+						Logger::Warning("Floating point literals are implicitly converted to integers during preprocessing.");
+						*evaluation = (int)atof(token.m_Lexeme);
+						break;
+					case TokenType::INTEGER_LITERAL:
+						*evaluation = atoi(token.m_Lexeme);
+						break;
+					case TokenType::KW_TRUE:
+						*evaluation = 1;
+						break;
+					case TokenType::KW_FALSE:
+						*evaluation = 0;
+						break;
+					default:
+						Logger::Error("Invalid primary expression in preprocessing phase.");
+						break;
+					}
+				}
+
+				return GenerateLiteralNode(token);
 			}
 
 			if (Peek(data) == TokenType::KW_THIS)
@@ -3627,13 +3664,13 @@ result->type = pType;
 
 			if (Match(data, TokenType::LEFT_PAREN))
 			{
-				AstNode* expression = ParseExpression(data);
+				AstNode* expression = ParseExpression(data, evaluation);
 				Consume(data, TokenType::RIGHT_PAREN);
 				return GenerateGroupingNode(expression);
 			}
 
 			int backtrackPosition = data.Scanner.Stream.Stream.Cursor;
-			AstNode* expr = ParseIdExpression(data);
+			AstNode* expr = ParseIdExpression(data, evaluation);
 			if (expr->success)
 			{
 				return expr;
@@ -3652,10 +3689,10 @@ result->type = pType;
 			return GenerateNoSuccessAstNode();
 		}
 
-		static AstNode* ParseIdExpression(ParserData& data)
+		static AstNode* ParseIdExpression(ParserData& data, int* evaluation)
 		{
 			int backtrackPosition = data.Scanner.Stream.Stream.Cursor;
-			AstNode* unqualifiedId = ParseUnqualifiedId(data);
+			AstNode* unqualifiedId = ParseUnqualifiedId(data, evaluation);
 			if (unqualifiedId->success)
 			{
 				return unqualifiedId;
@@ -3674,11 +3711,41 @@ result->type = pType;
 			return GenerateNoSuccessAstNode();
 		}
 
-		static AstNode* ParseUnqualifiedId(ParserData& data)
+		static AstNode* ParseUnqualifiedId(ParserData& data, int* evaluation)
 		{
 			if (Peek(data) == TokenType::IDENTIFIER)
 			{
-				return GenerateUnqualifiedIdNode(ConsumeCurrent(data, TokenType::IDENTIFIER));
+				Token token = ConsumeCurrent(data, TokenType::IDENTIFIER);
+				if (evaluation && ParserString::Compare(token.m_Lexeme, "defined"))
+				{
+					if (Match(data, TokenType::LEFT_PAREN))
+					{
+						Token symbol = ConsumeCurrent(data, TokenType::IDENTIFIER);
+						ConsumeCurrent(data, TokenType::RIGHT_PAREN);
+						*evaluation = (int)Symbols::IsDefined(data.PreprocessingSymbolTable, symbol);
+					}
+					else
+					{
+						Token symbol = ConsumeCurrent(data, TokenType::IDENTIFIER);
+						*evaluation = (int)Symbols::IsDefined(data.PreprocessingSymbolTable, symbol);
+					}
+				}
+				else if (evaluation && Symbols::IsDefined(data.PreprocessingSymbolTable, token))
+				{
+					const char* tokens = Symbols::ExpandMacro(data, token);
+					ScannerData backupScanner = data.Scanner;
+					ScannerData macroExpansionScanner = ScriptScanner::OpenScanner(CountingFileStream{
+							FileIO::CountingFileStreamReadFromString(tokens)
+						});
+					data.Scanner = macroExpansionScanner;
+					// This should evaluate the sub-expression...
+					ParseConstantExpression(data, evaluation);
+					ScriptScanner::CloseScanner(macroExpansionScanner);
+					ParserString::FreeString(tokens);
+					data.Scanner = backupScanner;
+				}
+
+				return GenerateUnqualifiedIdNode(token);
 			}
 
 			int backtrackPosition = data.Scanner.Stream.Stream.Cursor;
@@ -4051,15 +4118,14 @@ result->type = pType;
 		}
 
 		// Postfix Expressions
-		static AstNode* ParsePostfixExpression(ParserData& data)
+		static AstNode* ParsePostfixExpression(ParserData& data, int* evaluation)
 		{
 			// TODO: This one scares me. Test it pretty good, otherwise I have a feeling you will get infinite loops which results in horrible lag
 			// TODO: Lol, I was right. I got stuck in an infinite loop because I didn't test it.
-			// Try to look ahead and make sure we don't recurse further if it's not possible
-			bool shouldRecurse = LookAheadBeforeSemicolon(data, { TokenType::LEFT_BRACKET, TokenType::LEFT_PAREN, TokenType::DOT, TokenType::ARROW, TokenType::PLUS_PLUS, TokenType::MINUS_MINUS });
-
+			// TODO: I changed a lot of stuff in here to try and fix it, and I probably broke some stuff in the process so I REALLY have to 
+			// TODO: revisit this implementation sometime
 			int backtrackPosition = data.Scanner.Stream.Stream.Cursor;
-			AstNode* primaryExpression = ParsePrimaryExpression(data);
+			AstNode* primaryExpression = ParsePrimaryExpression(data, evaluation);
 			if (primaryExpression->success)
 			{
 				return primaryExpression;
@@ -4183,20 +4249,14 @@ result->type = pType;
 				return GenerateNoSuccessAstNode();
 			}
 
-			if (!shouldRecurse)
-			{
-				return GenerateNoSuccessAstNode();
-			}
-
-			AstNode* postfixExpression = ParsePostfixExpression(data);
 			if (Match(data, TokenType::LEFT_BRACKET))
 			{
 				int backtrackPosition2 = data.Scanner.Stream.Stream.Cursor;
-				AstNode* expression = ParseExpression(data);
+				AstNode* expression = ParseExpression(data, evaluation);
 				if (expression->success)
 				{
 					Consume(data, TokenType::RIGHT_BRACKET);
-					return GeneratePostfixBracketExpressionNode(postfixExpression, expression);
+					return expression;
 				}
 				FreeNode(expression);
 				BacktrackTo(data, backtrackPosition2);
@@ -4204,7 +4264,7 @@ result->type = pType;
 				// Optional
 				AstNode* bracedInitList = ParseBracedInitList(data);
 				Consume(data, TokenType::RIGHT_BRACKET);
-				return GeneratePostfixBracketBraceListNode(postfixExpression, bracedInitList);
+				return bracedInitList;
 			}
 
 			if (Match(data, TokenType::LEFT_PAREN))
@@ -4212,7 +4272,7 @@ result->type = pType;
 				// Optional
 				AstNode* expressionList = ParseExpressionList(data);
 				Consume(data, TokenType::RIGHT_PAREN);
-				return GeneratePostfixParenExpressionListNode(postfixExpression, expressionList);
+				return expressionList;
 			}
 
 			bool isDot = Match(data, TokenType::DOT);
@@ -4223,40 +4283,55 @@ result->type = pType;
 				bool hasTemplateKeyword = Match(data, TokenType::KW_TEMPLATE);
 				if (hasTemplateKeyword)
 				{
-					AstNode* idExpression = ParseIdExpression(data);
+					AstNode* idExpression = ParseIdExpression(data, evaluation);
 					if (!idExpression->success)
 					{
-						FreeNode(postfixExpression);
 						FreeNode(idExpression);
 						return GenerateNoSuccessAstNode();
 					}
-					return GeneratePostfixMemberIdExpressionNode(postfixExpression, idExpression, hasTemplateKeyword, memberOp);
+					return GeneratePostfixMemberIdExpressionNode(GenerateNoSuccessAstNode(), idExpression, hasTemplateKeyword, memberOp);
 				}
 
 				int backtrackPosition2 = data.Scanner.Stream.Stream.Cursor;
-				AstNode* idExpression = ParseIdExpression(data);
+				AstNode* idExpression = ParseIdExpression(data, evaluation);
 				if (idExpression->success)
 				{
-					return GeneratePostfixMemberIdExpressionNode(postfixExpression, idExpression, hasTemplateKeyword, memberOp);
+					return GeneratePostfixMemberIdExpressionNode(GenerateNoSuccessAstNode(), idExpression, hasTemplateKeyword, memberOp);
 				}
 				FreeNode(idExpression);
 				BacktrackTo(data, backtrackPosition2);
 
 				AstNode* pseudoDestructorName = ParsePseudoDestructorName(data);
-				return GeneratePostfixPseudoDestructorNode(postfixExpression, pseudoDestructorName, memberOp);
+				return GeneratePostfixPseudoDestructorNode(GenerateNoSuccessAstNode(), pseudoDestructorName, memberOp);
 			}
 
 			if (Match(data, TokenType::PLUS_PLUS))
 			{
-				return GeneratePostfixPlusPlusNode(postfixExpression);
+				if (evaluation)
+				{
+					*evaluation++;
+				}
+				// TODO: This is probably very bad...
+				return GeneratePostfixPlusPlusNode(GenerateNoSuccessAstNode());
 			}
 
 			if (Match(data, TokenType::MINUS_MINUS))
 			{
-				return GeneratePostfixMinusMinusNode(postfixExpression);
+				if (evaluation)
+				{
+					*evaluation--;
+				}
+				// TODO: This is probably very bad...
+				return GeneratePostfixMinusMinusNode(GenerateNoSuccessAstNode());
 			}
 
-			FreeNode(postfixExpression);
+			// Try to look ahead and make sure we don't recurse further if it's not possible
+			bool shouldRecurse = LookAheadBeforeSemicolon(data, { TokenType::LEFT_BRACKET, TokenType::LEFT_PAREN, TokenType::DOT, TokenType::ARROW, TokenType::PLUS_PLUS, TokenType::MINUS_MINUS });
+			if (!shouldRecurse)
+			{
+				return GenerateNoSuccessAstNode();
+			}
+			// TODO: I really probably shouldn't do this because I'm pretty sure it breaks postfix recursion
 			return GenerateNoSuccessAstNode();
 		}
 
@@ -4351,10 +4426,10 @@ result->type = pType;
 		}
 
 		// Unary Expressions
-		static AstNode* ParseUnaryExpression(ParserData& data)
+		static AstNode* ParseUnaryExpression(ParserData& data, int* evaluation)
 		{
 			int backtrackCursor = data.Scanner.Stream.Stream.Cursor;
-			AstNode* postfix = ParsePostfixExpression(data);
+			AstNode* postfix = ParsePostfixExpression(data, evaluation);
 			if (postfix->success)
 			{
 				return postfix;
@@ -4365,7 +4440,36 @@ result->type = pType;
 			if (Peek(data) == TokenType::PLUS_PLUS || Peek(data) == TokenType::MINUS_MINUS || Peek(data) == TokenType::STAR || Peek(data) == TokenType::AND ||
 				Peek(data) == TokenType::PLUS || Peek(data) == TokenType::MINUS || Peek(data) == TokenType::BANG || Peek(data) == TokenType::TILDE)
 			{
-				return GenerateUnaryExpressionNode(ParseOverloadableOperator(data), ParseCastExpression(data));
+				OverloadableOperatorType op = ParseOverloadableOperator(data);
+				AstNode* castExpr = ParseCastExpression(data, evaluation);
+				if (evaluation)
+				{
+					if (op == OverloadableOperatorType::PlusPlus)
+					{
+						*evaluation++;
+					}
+					else if (op == OverloadableOperatorType::MinusMinus)
+					{
+						*evaluation--;
+					}
+					else if (op == OverloadableOperatorType::Plus)
+					{
+						*evaluation = +*evaluation;
+					}
+					else if (op == OverloadableOperatorType::Minus)
+					{
+						*evaluation = -*evaluation;
+					}
+					else if (op == OverloadableOperatorType::Not)
+					{
+						*evaluation = (int)!(*evaluation);
+					}
+					else if (op == OverloadableOperatorType::BitComplement)
+					{
+						*evaluation = (int)~(*evaluation);
+					}
+				}
+				return GenerateUnaryExpressionNode(op, castExpr);
 			}
 
 			if (Match(data, TokenType::KW_SIZEOF))
@@ -4623,10 +4727,12 @@ result->type = pType;
 		}
 
 		// Cast
-		static AstNode* ParseCastExpression(ParserData& data)
+		static AstNode* ParseCastExpression(ParserData& data, int* evaluation)
 		{
 			int backtrackPosition = data.Scanner.Stream.Stream.Cursor;
-			if (Match(data, TokenType::LEFT_PAREN))
+
+			// If we are evaluating a preprocessor macro, casts are illegal so we shouldn't even try it
+			if (!evaluation && Match(data, TokenType::LEFT_PAREN))
 			{
 				AstNode* typeId = ParseTypeId(data);
 				if (typeId->success)
@@ -4638,13 +4744,13 @@ result->type = pType;
 				BacktrackTo(data, backtrackPosition);
 			}
 
-			return ParseUnaryExpression(data);
+			return ParseUnaryExpression(data, evaluation);
 		}
 
 		// PointerToMember Expression
-		static AstNode* ParsePmExpression(ParserData& data)
+		static AstNode* ParsePmExpression(ParserData& data, int* evaluation)
 		{
-			AstNode* result = ParseCastExpression(data);
+			AstNode* result = ParseCastExpression(data, evaluation);
 
 			// TODO: Does it matter that I'm doing left recursion and he does right recursion????
 			while (Match(data, TokenType::POINTER_TO_MEMBER))
@@ -4657,42 +4763,82 @@ result->type = pType;
 		}
 
 		// Primary operations
-		static AstNode* ParseMultiplicativeExpression(ParserData& data)
+		static AstNode* ParseMultiplicativeExpression(ParserData& data, int* evaluation)
 		{
-			AstNode* result = ParsePmExpression(data);
+			AstNode* result = ParsePmExpression(data, evaluation);
 
 			while (Peek(data) == TokenType::STAR || Peek(data) == TokenType::DIV || Peek(data) == TokenType::MODULO)
 			{
 				OverloadableOperatorType op = ParseOverloadableOperator(data);
-				AstNode* right = ParseMultiplicativeExpression(data);
+				int rightEval = 0;
+				AstNode* right = evaluation != nullptr ? ParseMultiplicativeExpression(data, &rightEval) : ParseMultiplicativeExpression(data);
+				if (evaluation)
+				{
+					if (op == OverloadableOperatorType::Multiply)
+					{
+						*evaluation *= rightEval;
+					}
+					else if (op == OverloadableOperatorType::Divide)
+					{
+						*evaluation /= rightEval;
+					}
+					else if (op == OverloadableOperatorType::Modulo)
+					{
+						*evaluation %= rightEval;
+					}
+				}
 				result = GenerateBinaryExpressionNode(result, op, right);
 			}
 
 			return result;
 		}
 
-		static AstNode* ParseAdditiveExpression(ParserData& data)
+		static AstNode* ParseAdditiveExpression(ParserData& data, int* evaluation)
 		{
-			AstNode* result = ParseMultiplicativeExpression(data);
+			AstNode* result = ParseMultiplicativeExpression(data, evaluation);
 
 			while (Peek(data) == TokenType::PLUS || Peek(data) == TokenType::MINUS)
 			{
 				OverloadableOperatorType op = ParseOverloadableOperator(data);
-				AstNode* right = ParseAdditiveExpression(data);
+				int rightEval = 0;
+				AstNode* right = evaluation != nullptr ? ParseAdditiveExpression(data, &rightEval) : ParseAdditiveExpression(data);
+				if (evaluation)
+				{
+					if (op == OverloadableOperatorType::Plus)
+					{
+						*evaluation += rightEval;
+					}
+					else if (op == OverloadableOperatorType::Minus)
+					{
+						*evaluation -= rightEval;
+					}
+				}
 				result = GenerateBinaryExpressionNode(result, op, right);
 			}
 
 			return result;
 		}
 
-		static AstNode* ParseShiftExpression(ParserData& data)
+		static AstNode* ParseShiftExpression(ParserData& data, int* evaluation)
 		{
-			AstNode* result = ParseAdditiveExpression(data);
+			AstNode* result = ParseAdditiveExpression(data, evaluation);
 
 			while (Peek(data) == TokenType::LEFT_SHIFT || Peek(data) == TokenType::RIGHT_SHIFT)
 			{
 				OverloadableOperatorType op = ParseOverloadableOperator(data);
-				AstNode* right = ParseShiftExpression(data);
+				int rightEval = 0;
+				AstNode* right = evaluation != nullptr ? ParseShiftExpression(data, &rightEval) : ParseShiftExpression(data);
+				if (evaluation)
+				{
+					if (op == OverloadableOperatorType::LeftShift)
+					{
+						*evaluation <<= rightEval;
+					}
+					else if (op == OverloadableOperatorType::RightShift)
+					{
+						*evaluation >>= rightEval;
+					}
+				}
 				result = GenerateBinaryExpressionNode(result, op, right);
 			}
 
@@ -4700,28 +4846,61 @@ result->type = pType;
 		}
 
 		// Comparision operations
-		static AstNode* ParseRelationalExpression(ParserData& data)
+		static AstNode* ParseRelationalExpression(ParserData& data, int* evaluation)
 		{
-			AstNode* result = ParseShiftExpression(data);
+			AstNode* result = ParseShiftExpression(data, evaluation);
 
-			while (Peek(data) == TokenType::LEFT_ANGLE_BRACKET || Peek(data) == TokenType::RIGHT_ANGLE_BRACKET || Peek(data) == TokenType::LESS_THAN_EQ || Peek(data) == TokenType::GREATER_THAN_EQ)
+			while (Peek(data) == TokenType::LEFT_ANGLE_BRACKET || Peek(data) == TokenType::RIGHT_ANGLE_BRACKET || Peek(data) == TokenType::LESS_THAN_EQ ||
+				Peek(data) == TokenType::GREATER_THAN_EQ)
 			{
 				OverloadableOperatorType op = ParseOverloadableOperator(data);
-				AstNode* right = ParseRelationalExpression(data);
+				int rightEval = 0;
+				AstNode* right = evaluation != nullptr ? ParseRelationalExpression(data, &rightEval) : ParseRelationalExpression(data);
+				if (evaluation)
+				{
+					if (op == OverloadableOperatorType::LessThan)
+					{
+						*evaluation = *evaluation < rightEval;
+					}
+					else if (op == OverloadableOperatorType::GreaterThan)
+					{
+						*evaluation = *evaluation > rightEval;
+					}
+					else if (op == OverloadableOperatorType::LessThanEqual)
+					{
+						*evaluation = *evaluation <= rightEval;
+					}
+					else if (op == OverloadableOperatorType::GreaterThanEqual)
+					{
+						*evaluation = *evaluation >= rightEval;
+					}
+				}
 				result = GenerateBinaryExpressionNode(result, op, right);
 			}
 
 			return result;
 		}
 
-		static AstNode* ParseEqualityExpression(ParserData& data)
+		static AstNode* ParseEqualityExpression(ParserData& data, int* evaluation)
 		{
-			AstNode* result = ParseRelationalExpression(data);
+			AstNode* result = ParseRelationalExpression(data, evaluation);
 
 			while (Peek(data) == TokenType::EQUAL_EQUAL || Peek(data) == TokenType::BANG_EQUAL)
 			{
 				OverloadableOperatorType op = ParseOverloadableOperator(data);
-				AstNode* right = ParseEqualityExpression(data);
+				int rightEval = 0;
+				AstNode* right = evaluation != nullptr ? ParseEqualityExpression(data, &rightEval) : ParseEqualityExpression(data);
+				if (evaluation)
+				{
+					if (op == OverloadableOperatorType::EqualEqual)
+					{
+						*evaluation = *evaluation == rightEval;
+					}
+					else if (op == OverloadableOperatorType::NotEqual)
+					{
+						*evaluation = *evaluation != rightEval;
+					}
+				}
 				result = GenerateBinaryExpressionNode(result, op, right);
 			}
 
@@ -4729,70 +4908,95 @@ result->type = pType;
 		}
 
 		// Logical operations
-		static AstNode* ParseAndExpression(ParserData& data)
+		static AstNode* ParseAndExpression(ParserData& data, int* evaluation)
 		{
-			AstNode* result = ParseEqualityExpression(data);
+			AstNode* result = ParseEqualityExpression(data, evaluation);
 
 			while (Peek(data) == TokenType::AND)
 			{
 				OverloadableOperatorType op = ParseOverloadableOperator(data);
-				AstNode* right = ParseAndExpression(data);
+				int rightEval = 0;
+				AstNode* right = evaluation != nullptr ? ParseAndExpression(data, &rightEval) : ParseAndExpression(data);
+				if (evaluation)
+				{
+					*evaluation = (int)((*evaluation) & rightEval);
+				}
 				result = GenerateBinaryExpressionNode(result, op, right);
 			}
 
 			return result;
 		}
 
-		static AstNode* ParseExclusiveOrExpression(ParserData& data)
+		static AstNode* ParseExclusiveOrExpression(ParserData& data, int* evaluation)
 		{
-			AstNode* result = ParseAndExpression(data);
+			AstNode* result = ParseAndExpression(data, evaluation);
 
 			while (Peek(data) == TokenType::CARET)
 			{
 				OverloadableOperatorType op = ParseOverloadableOperator(data);
-				AstNode* right = ParseExclusiveOrExpression(data);
+				int rightEval = 0;
+				AstNode* right = evaluation != nullptr ? ParseExclusiveOrExpression(data, &rightEval) : ParseExclusiveOrExpression(data);
+				if (evaluation)
+				{
+					*evaluation = (*evaluation) ^ rightEval;
+				}
 				result = GenerateBinaryExpressionNode(result, op, right);
 			}
 
 			return result;
 		}
 
-		static AstNode* ParseInclusiveOrExpression(ParserData& data)
+		static AstNode* ParseInclusiveOrExpression(ParserData& data, int* evaluation)
 		{
-			AstNode* result = ParseExclusiveOrExpression(data);
+			AstNode* result = ParseExclusiveOrExpression(data, evaluation);
 
 			while (Peek(data) == TokenType::PIPE)
 			{
 				OverloadableOperatorType op = ParseOverloadableOperator(data);
-				AstNode* right = ParseInclusiveOrExpression(data);
+				int rightEval = 0;
+				AstNode* right = evaluation != nullptr ? ParseInclusiveOrExpression(data, &rightEval) : ParseInclusiveOrExpression(data);
+				if (evaluation)
+				{
+					*evaluation = (*evaluation) | rightEval;
+				}
 				result = GenerateBinaryExpressionNode(result, op, right);
 			}
 
 			return result;
 		}
 
-		static AstNode* ParseLogicalAndExpression(ParserData& data)
+		static AstNode* ParseLogicalAndExpression(ParserData& data, int* evaluation)
 		{
-			AstNode* result = ParseInclusiveOrExpression(data);
+			AstNode* result = ParseInclusiveOrExpression(data, evaluation);
 
 			while (Peek(data) == TokenType::LOGICAL_AND)
 			{
 				OverloadableOperatorType op = ParseOverloadableOperator(data);
-				AstNode* right = ParseLogicalAndExpression(data);
+				int rightEval = 0;
+				AstNode* right = evaluation != nullptr ? ParseLogicalAndExpression(data, &rightEval) : ParseLogicalAndExpression(data);
+				if (evaluation)
+				{
+					*evaluation = (int)((*evaluation) && rightEval);
+				}
 				result = GenerateBinaryExpressionNode(result, op, right);
 			}
 
 			return result;
 		}
 
-		static AstNode* ParseLogicalOrExpression(ParserData& data)
+		static AstNode* ParseLogicalOrExpression(ParserData& data, int* evaluation)
 		{
-			AstNode* result = ParseLogicalAndExpression(data);
+			AstNode* result = ParseLogicalAndExpression(data, evaluation);
 
 			while (Peek(data) == TokenType::LOGICAL_OR)
 			{
 				OverloadableOperatorType op = ParseOverloadableOperator(data);
-				AstNode* right = ParseLogicalOrExpression(data);
+				int rightEval = 0;
+				AstNode* right = evaluation != nullptr ? ParseLogicalOrExpression(data, &rightEval) : ParseLogicalOrExpression(data);
+				if (evaluation)
+				{
+					*evaluation = (int)((*evaluation) || rightEval);
+				}
 				result = GenerateBinaryExpressionNode(result, op, right);
 			}
 
@@ -4800,25 +5004,25 @@ result->type = pType;
 		}
 
 		// Misc expressions
-		static AstNode* ParseConditionalExpression(ParserData& data)
+		static AstNode* ParseConditionalExpression(ParserData& data, int* evaluation)
 		{
-			AstNode* result = ParseLogicalOrExpression(data);
+			AstNode* result = ParseLogicalOrExpression(data, evaluation);
 
 			if (Match(data, TokenType::QUESTION))
 			{
-				AstNode* ifTrueNode = ParseExpression(data);
+				AstNode* ifTrueNode = ParseExpression(data, evaluation);
 				Consume(data, TokenType::SEMICOLON);
-				AstNode* ifFalseNode = ParseAssignmentExpression(data);
+				AstNode* ifFalseNode = ParseAssignmentExpression(data, evaluation);
 				result = GenerateTernaryExpressionNode(result, ifTrueNode, ifFalseNode);
 			}
 
 			return result;
 		}
 
-		static AstNode* ParseAssignmentExpression(ParserData& data)
+		static AstNode* ParseAssignmentExpression(ParserData& data, int* evaluation)
 		{
 			int backtrackPosition = data.Scanner.Stream.Stream.Cursor;
-			AstNode* result = ParseConditionalExpression(data);
+			AstNode* result = ParseConditionalExpression(data, evaluation);
 
 			if (result->success)
 			{
@@ -4827,7 +5031,7 @@ result->type = pType;
 			FreeNode(result);
 			BacktrackTo(data, backtrackPosition);
 
-			result = ParseLogicalOrExpression(data);
+			result = ParseLogicalOrExpression(data, evaluation);
 			if (IsAssignmentOperator(Peek(data)))
 			{
 				AssignmentOperatorType assignmentType = AssignmentOperatorType::None;
@@ -4876,7 +5080,7 @@ result->type = pType;
 			return ParseThrowExpression(data);
 		}
 
-		static AstNode* ParseAlignmentExpression(ParserData& data)
+		static AstNode* ParseAlignmentExpression(ParserData& data, int* evaluation)
 		{
 			int backtrackPosition = data.Scanner.Stream.Stream.Cursor;
 			if (Peek(data) == TokenType::KW_ALIGN_OF)
@@ -4895,24 +5099,24 @@ result->type = pType;
 			return GenerateNoSuccessAstNode();
 		}
 
-		static AstNode* ParseExpression(ParserData& data)
+		static AstNode* ParseExpression(ParserData& data, int* evaluation)
 		{
-			AstNode* expression = ParseAssignmentExpression(data);
+			AstNode* expression = ParseAssignmentExpression(data, evaluation);
 
 			while (Match(data, TokenType::COMMA))
 			{
 				AstNode* nextExpression = expression;
 				AstNode* result = GenerateAstNode(AstNodeType::Expression);
-				expression->expressionNode.expression = ParseExpression(data);
+				expression->expressionNode.expression = ParseExpression(data, evaluation);
 				expression->expressionNode.nextExpression = nextExpression;
 			}
 
 			return expression;
 		}
 
-		static AstNode* ParseConstantExpression(ParserData& data)
+		static AstNode* ParseConstantExpression(ParserData& data, int* evaluation)
 		{
-			return GenerateConstantExpressionNode(ParseConditionalExpression(data));
+			return GenerateConstantExpressionNode(ParseConditionalExpression(data, evaluation));
 		}
 
 		// Statements
@@ -8855,159 +9059,6 @@ result->type = pType;
 			}
 		}
 
-		//static int EvaluateBooleanConstantExpression(AstNode* tree);
-		//static int EvaluateBooleanLiteralExpression(AstNode* tree)
-		//{
-		//	switch (tree->literalNode.token.m_Type)
-		//	{
-		//	case TokenType::STRING_LITERAL:
-		//		Logger::Error("No string literals allowed in preprocessor constant expressions.");
-		//		return 0;
-		//	case TokenType::CHARACTER_LITERAL:
-		//		return (int)tree->literalNode.token.m_Lexeme[0];
-		//	case TokenType::INTEGER_LITERAL:
-		//		return atoi(tree->literalNode.token.m_Lexeme);
-		//	case TokenType::FLOATING_POINT_LITERAL:
-		//		Logger::Error("No floating point literals allowed in preprocessor constant expression. Must be of integral type.");
-		//		return 0;
-		//	case TokenType::KW_TRUE:
-		//		return true;
-		//	case TokenType::KW_FALSE:
-		//		return false;
-		//	}
-
-		//	Logger::Warning("Unknown literal type while evaluating preprocessor constant expression.");
-		//	return 0;
-		//}
-
-		//static int EvaluateBooleanBinaryExpression(AstNode* tree)
-		//{
-		//	int left = EvaluateBooleanConstantExpression(tree->binaryExpression.left);
-		//	int right = EvaluateBooleanConstantExpression(tree->binaryExpression.right);
-		//	switch (tree->binaryExpression.opType)
-		//	{
-		//	case OverloadableOperatorType::BitAnd:
-		//		return left & right;
-		//	case OverloadableOperatorType::BitOr:
-		//		return left | right;
-		//	case OverloadableOperatorType::Divide:
-		//		return left / right;
-		//	case OverloadableOperatorType::EqualEqual:
-		//		return left == right;
-		//	case OverloadableOperatorType::GreaterThan:
-		//		return left > right;
-		//	case OverloadableOperatorType::GreaterThanEqual:
-		//		return left >= right;
-		//	case OverloadableOperatorType::LeftShift:
-		//		return left << right;
-		//	case OverloadableOperatorType::LessThan:
-		//		return left < right;
-		//	case OverloadableOperatorType::LessThanEqual:
-		//		return left <= right;
-		//	case OverloadableOperatorType::LogicAnd:
-		//		return left && right;
-		//	case OverloadableOperatorType::LogicOr:
-		//		return left || right;
-		//	case OverloadableOperatorType::Minus:
-		//		return left - right;
-		//	case OverloadableOperatorType::Modulo:
-		//		return left % right;
-		//	case OverloadableOperatorType::Multiply:
-		//		return left * right;
-		//	case OverloadableOperatorType::NotEqual:
-		//		return left != right;
-		//	case OverloadableOperatorType::Plus:
-		//		return left + right;
-		//	case OverloadableOperatorType::RightShift:
-		//		return left >> right;
-		//	case OverloadableOperatorType::Xor:
-		//		return left ^ right;
-		//	}
-
-		//	Logger::Warning("Unknown constant binary expression type.");
-		//	return 0;
-		//}
-
-		//static int EvaluateBooleanUnaryExpression(AstNode* tree)
-		//{
-		//	int evaluation = EvaluateBooleanConstantExpression(tree->unaryExpression.expression);
-		//	switch (tree->unaryExpression.opType)
-		//	{
-		//	case OverloadableOperatorType::PlusPlus:
-		//		return ++evaluation;
-		//	case OverloadableOperatorType::MinusMinus:
-		//		return --evaluation;
-		//	case OverloadableOperatorType::Plus:
-		//		return +evaluation;
-		//	case OverloadableOperatorType::Minus:
-		//		return -evaluation;
-		//	case OverloadableOperatorType::Not:
-		//		return !(evaluation);
-		//	case OverloadableOperatorType::BitComplement:
-		//		return ~evaluation;
-		//	}
-
-		//	Logger::Warning("Unknown unary expression type.");
-		//	return 0;
-		//}
-
-		//static int EvaluatePostfixSimpleTypeExpressionList(AstNode* tree)
-		//{
-		//	tree->postfixSimpleTypeExpressionList.simpleTypeSpecifier->simpleTypeSpec.typeName->className.identifier;
-		//	if (tree->postfixSimpleTypeExpressionList.simpleTypeSpecifier->type == AstNodeType::SimpleTypeSpec)
-		//	{
-		//		AstNode* simpleTypeSpec = tree->postfixSimpleTypeExpressionList.simpleTypeSpecifier;
-		//		if (simpleTypeSpec->simpleTypeSpec.typeName->type == AstNodeType::ClassName)
-		//		{
-		//			AstNode* className = simpleTypeSpec->simpleTypeSpec.typeName;
-		//			if (ParserString::Compare(className->className.identifier.m_Lexeme, "defined"))
-		//			{
-
-		//			}
-		//		}
-		//	}
-
-		//	// TODO: Implement me...
-		//	return 0;
-		//}
-
-		//static int EvaluateBooleanTernaryExpression(AstNode* tree)
-		//{
-		//	// TODO: Implement me
-		//	return 0;
-		//}
-
-		//static int EvaluateBooleanConstantExpression(AstNode* tree)
-		//{
-		//	switch (tree->type)
-		//	{
-		//	case AstNodeType::TernaryExpression:
-		//		return EvaluateBooleanTernaryExpression(tree);
-		//	case AstNodeType::BinaryExpression:
-		//		return EvaluateBooleanBinaryExpression(tree);
-		//	case AstNodeType::UnaryExpression:
-		//		return EvaluateBooleanUnaryExpression(tree);
-		//	case AstNodeType::PostfixSimpleTypeExpressionList:
-		//		return EvaluatePostfixSimpleTypeExpressionList(tree);
-		//	case AstNodeType::Literal:
-		//		return EvaluateBooleanLiteralExpression(tree);
-		//	case AstNodeType::Grouping:
-		//		return EvaluateBooleanConstantExpression(tree->grouping.expression);
-		//	}
-
-		//	Logger::Warning("Unknown constant expression type.");
-		//	return 0;
-		//}
-
-		//static bool EvaluateConstantPreprocessorExpression(ParserData& data)
-		//{
-		//	AstNode* expression = ParseConstantExpression(data);
-		//	Logger::Assert(expression->type == AstNodeType::ConstantExpression, "#if or #elif must be followed by a constant expression.");
-		//	int evaluation = EvaluateBooleanConstantExpression(expression->constantExpression.expression);
-		//	FreeNode(expression);
-		//	return evaluation;
-		//}
-
 		static void Preprocess(const char* fileBeingParsed, const std::vector<std::filesystem::path>& includeDirs, ParserData& data)
 		{
 			data.Scanner.Stream.Stream.Cursor = 0;
@@ -9189,14 +9240,13 @@ result->type = pType;
 				}
 				else if (Match(data, TokenType::KW_IF))
 				{
-					AstNode* constantExpression = ParseConstantExpression(data);
+					int evaluation = 0;
+					int* evalAddress = writeToPPFile ? &evaluation : nullptr;
+					AstNode* constantExpression = ParseConstantExpression(data, evalAddress);
 					if (constantExpression->success)
 					{
 						// optional
 						Consume(data, TokenType::NEWLINE);
-						bool evaluation = false;
-						// TODO: Implement me!
-						//bool evaulation = EvaluateConstantExpression(constantExpression);
 
 						PreprocessingAstNode* group = ParseGroup(data, writeToPPFile && evaluation);
 						return GenerateIfGroupNode(constantExpression, group, evaluation);
@@ -9237,16 +9287,17 @@ result->type = pType;
 
 					if (ParserString::Compare(identifier.m_Lexeme, "elif"))
 					{
-						AstNode* constantExpression = ParseConstantExpression(data);
+						int evaluation = 0;
+						int* evalAddress = writeToPPFile ? &evaluation : nullptr;
+						AstNode* constantExpression = ParseConstantExpression(data, evalAddress);
 						if (constantExpression->success)
 						{
-							Consume(data, TokenType::NEWLINE);
-
-							// TODO: Implement me!
-							bool evaluation = false;
-							//bool evaluation = EvaluateConstantExpression(constantExpression);
+							if (!Match(data, TokenType::NEWLINE))
+							{
+								FreePreprocessingNode(ParseTextLine(data, false));
+								Logger::Warning("Unknown text line encountered at line '%d'.", data.Scanner.Stream.Line);
+							}
 							PreprocessingAstNode* group = ParseGroup(data, evaluation && writeToPPFile);
-
 							return GenerateElifGroupNode(constantExpression, group, evaluation);
 						}
 						FreeNode(constantExpression);
@@ -9288,7 +9339,10 @@ result->type = pType;
 						PreprocessingAstNode* ppTokens = ParsePPTokens(data, false, true);
 						if (ppTokens->success)
 						{
-							ParseIncludeFileIfNeeded(ppTokens, data, writeToPPFile);
+							if (writeToPPFile)
+							{
+								ParseIncludeFileIfNeeded(ppTokens, data, writeToPPFile);
+							}
 							Consume(data, TokenType::NEWLINE);
 							return GenerateMacroIncludeNode(ppTokens);
 						}
@@ -9324,8 +9378,7 @@ result->type = pType;
 						if (Peek(data) == TokenType::IDENTIFIER)
 						{
 							Token identifier = ConsumeCurrent(data, TokenType::IDENTIFIER);
-							// TODO: make sure this left parenthisis is not preceded by whitespace
-							if (Match(data, TokenType::LEFT_PAREN))
+							if (MatchNoPrecedingWhitespace(data, TokenType::LEFT_PAREN))
 							{
 								PreprocessingAstNode* identifierList = ParseIdentifierList(data, false);
 								if (identifierList->success)
@@ -9342,9 +9395,27 @@ result->type = pType;
 								PreprocessingAstNode* replacementList = ParseReplacementList(data, false);
 								if (replacementList->success)
 								{
-									Consume(data, TokenType::NEWLINE);
+									if (!Match(data, TokenType::NEWLINE))
+									{
+										PreprocessingAstNode* iter = replacementList->replacementList.ppTokens;
+										while (iter->ppTokens.nextPreprocessingToken->type != PreprocessingAstNodeType::None)
+										{
+											if (iter->type == PreprocessingAstNodeType::PPTokens)
+											{
+												iter = iter->ppTokens.nextPreprocessingToken;
+											} 
+										}
+										if (iter->ppTokens.preprocessingToken->type != PreprocessingAstNodeType::Newline)
+										{
+											ErrorAtToken(data, identifier);
+										}
+									}
 									PreprocessingAstNode* symbolTree = GenerateMacroDefineFunctionNode(identifier, identifierList, replacementList);
-									Symbols::AddDefineSymbol(data.PreprocessingSymbolTable, identifier, identifier.m_Line, symbolTree);
+
+									if (writeToPPFile)
+									{
+										Symbols::AddDefineSymbol(data.PreprocessingSymbolTable, identifier, identifier.m_Line, symbolTree);
+									}
 									return symbolTree;
 								}
 								FreePreprocessingNode(replacementList);
@@ -9356,7 +9427,11 @@ result->type = pType;
 							{
 								Consume(data, TokenType::NEWLINE);
 								PreprocessingAstNode* symbolTree = GenerateMacroDefineNode(identifier, replacementList);
-								Symbols::AddDefineSymbol(data.PreprocessingSymbolTable, identifier, identifier.m_Line, symbolTree);
+
+								if (writeToPPFile)
+								{
+									Symbols::AddDefineSymbol(data.PreprocessingSymbolTable, identifier, identifier.m_Line, symbolTree);
+								}
 								return symbolTree;
 							}
 							FreePreprocessingNode(replacementList);
@@ -9370,7 +9445,11 @@ result->type = pType;
 						{
 							Token identifier = ConsumeCurrent(data, TokenType::IDENTIFIER);
 							Consume(data, TokenType::NEWLINE);
-							Symbols::Undefine(data.PreprocessingSymbolTable, identifier, identifier.m_Line);
+
+							if (writeToPPFile)
+							{
+								Symbols::Undefine(data.PreprocessingSymbolTable, identifier, identifier.m_Line);
+							}
 							return GenerateMacroUndefNode(identifier);
 						}
 					}
@@ -9555,7 +9634,7 @@ result->type = pType;
 			if (Peek(data) == TokenType::IDENTIFIER)
 			{
 				Token token = ConsumeCurrent(data, TokenType::IDENTIFIER);
-				if (Symbols::IsSymbol(data.PreprocessingSymbolTable, token))
+				if (writeToPPFile && Symbols::IsSymbol(data.PreprocessingSymbolTable, token))
 				{
 					const char* tokens = Symbols::ExpandMacro(data, token);
 					ScannerData backupScanner = data.Scanner;
@@ -9698,15 +9777,6 @@ result->type = pType;
 						data.indentLevel--;
 						Write(data, true, "\n");
 					}
-
-					/*FileIO::WriteToStream(data.PreprocessOutputStream, token.m_Lexeme);
-					if (token.m_Type != TokenType::LEFT_CURLY_BRACKET && token.m_Type != TokenType::RIGHT_CURLY_BRACKET && token.m_Type != TokenType::LEFT_BRACKET &&
-						token.m_Type != TokenType::LEFT_PAREN && token.m_Type != TokenType::LEFT_ANGLE_BRACKET &&
-						token.m_Type != TokenType::COLON && token.m_Type != TokenType::SEMICOLON && token.m_Type != TokenType::DOT && token.m_Type != TokenType::ARROW &&
-						token.m_Type != TokenType::TILDE && token.m_Type != TokenType::BANG && token.m_Type != TokenType::PLUS_PLUS && token.m_Type != TokenType::MINUS_MINUS)
-					{
-						FileIO::WriteToStream(data.PreprocessOutputStream, " ");
-					}*/
 					ScriptScanner::AppendTokenToStream(data.PreprocessOutputStream, token);
 				}
 				return GeneratePreprocessingOpOrPuncNode(token);

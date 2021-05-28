@@ -122,7 +122,7 @@ namespace CppParser
 			// Get the right line number
 			if (newCursorPosition < stream.Stream.Cursor)
 			{
-				for (int i = stream.Stream.Cursor; i >= newCursorPosition; i--)
+				for (int i = stream.Stream.Cursor - 1; i >= newCursorPosition; i--)
 				{
 					StreamGoTo(stream.Stream, i);
 					char c = StreamPeek(stream.Stream, 0);
@@ -151,7 +151,7 @@ namespace CppParser
 			}
 			else if (newCursorPosition > stream.Stream.Cursor)
 			{
-				for (int i = stream.Stream.Cursor; i <= newCursorPosition; i++)
+				for (int i = stream.Stream.Cursor - 1; i < newCursorPosition; i++)
 				{
 					StreamGoTo(stream.Stream, i);
 					char c = StreamPeek(stream.Stream, 0);
@@ -291,9 +291,14 @@ namespace CppParser
 		{
 			Logger::AssertCritical(file.Type == StreamType::Read, "Invalid file stream. This function is only valid for read file streams.");
 
+			if (file.Cursor + numBytesToPeekAhead < 0 || file.Cursor + numBytesToPeekAhead >= file.Size)
+			{
+				return '\0';
+			}
+
 			if (numBytesToPeekAhead == 0)
 			{
-				return file.Data[file.Cursor];
+				return file.Data[file.Cursor - file.ChunkStart];
 			}
 
 			FileStream streamShallowCopy = file;
@@ -314,11 +319,16 @@ namespace CppParser
 		{
 			Logger::AssertCritical(file.Type == StreamType::Read, "Invalid file stream. This function is only valid for read file streams.");
 
+			if (size >= STREAM_BUFFER_SIZE)
+			{
+				printf("HERE");
+			}
 			Logger::AssertCritical(size < STREAM_BUFFER_SIZE, "This File I/O library does not support substrings greater than '%d' characters right now.", STREAM_BUFFER_SIZE);
 			FileStream streamShallowCopy = file;
 			streamShallowCopy.Cursor = start;
 			StreamReadChunk(streamShallowCopy, size);
-			const char* substring = ParserString::Substring(file.Data, start - file.ChunkStart, size);
+			const char* substring = ParserString::Substring(streamShallowCopy.Data, start - streamShallowCopy.ChunkStart, size);
+			StreamGoTo(streamShallowCopy, file.Cursor);
 			return substring;
 		}
 
@@ -336,6 +346,11 @@ namespace CppParser
 			FileStream res;
 			res.Type = StreamType::Write;
 			res.fp = fopen(filepath, "w+");
+			if (!res.fp)
+			{
+				return res;
+			}
+
 			res.ChunkStart = 0;
 			res.Cursor = 0;
 			res.Size = 0;
@@ -374,14 +389,18 @@ namespace CppParser
 		// Internal functions
 		static void StreamReadChunk(FileStream& file, int numBytesToRead, bool forceRead)
 		{
-			Logger::AssertCritical(file.Cursor - file.ChunkStart >= 0 && file.Cursor - file.ChunkStart < STREAM_BUFFER_SIZE && file.Cursor <= file.Size, "Invalid chunk cursor boundaries in file stream. 377");
+			if (!(file.Cursor >= 0 && file.Cursor <= file.Size))
+			{
+				printf("HERE");
+			}
+			Logger::AssertCritical(file.Cursor >= 0 && file.Cursor <= file.Size, "Invalid chunk cursor boundaries in file stream. 377");
 			if (!file.fp)
 			{
 				return;
 			}
 
 			// Only read file contents if the file cursor is out of bounds of our "view" of the file
-			if (forceRead || file.Cursor + numBytesToRead > file.ChunkStart + STREAM_BUFFER_SIZE || file.Cursor < file.ChunkStart)
+			if (forceRead || file.Cursor + numBytesToRead >= file.ChunkStart + STREAM_BUFFER_SIZE || file.Cursor < file.ChunkStart)
 			{
 				Logger::AssertCritical(file.Cursor >= 0 && file.Cursor < file.Size, "Invalid file chunk to read.");
 				fseek(file.fp, file.Cursor, SEEK_SET);

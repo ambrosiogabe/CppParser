@@ -519,6 +519,7 @@ namespace CppParser
 			}
 
 			ParserString::FreeString(token.m_Lexeme);
+			FileIO::StreamGoTo(shallowCopyScannerData.Stream, scannerData.Stream.Stream.Cursor);
 			return token.m_Type;
 		}
 
@@ -597,8 +598,6 @@ namespace CppParser
 			{
 				Token dummy;
 				dummy.m_Type = TokenType::END_OF_FILE;
-				dummy.m_Column = -1;
-				dummy.m_Line = -1;
 				dummy.m_Lexeme = "";
 				return dummy;
 			}
@@ -1158,8 +1157,7 @@ namespace CppParser
 			}
 			else
 			{
-
-				while (Peek(data) != '"' && !AtEnd(data))
+				while (((PeekPrevious(data, 1) == '\\' && Peek(data) == '"') || Peek(data) != '"') && !AtEnd(data))
 				{
 					Advance(data);
 				}

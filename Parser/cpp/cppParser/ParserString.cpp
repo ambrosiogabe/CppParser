@@ -128,7 +128,7 @@ namespace CppParser
 
 		void FreeString(const char* str)
 		{
-			if (str && str != DefaultEmptyString)
+			if (str && str != DefaultEmptyString && !Compare(str, ""))
 			{
 				FreeMem((void*)str);
 			}
@@ -148,6 +148,11 @@ namespace CppParser
 			contents.push(*c);
 			c++;
 		}
+	}
+
+	char StringBuilder::Pop()
+	{
+		return contents.pop();
 	}
 
 	void StringBuilder::Append(char character)

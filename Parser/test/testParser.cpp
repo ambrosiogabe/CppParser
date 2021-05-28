@@ -1,9 +1,7 @@
 #ifndef TEST_PARSER_CPP
 #define TEST_PARSER_CPP
 
-#include <list>
-
-// #include <vector>
+#include <vector>
 #define MACRO_MAGIC           \
 	printf("Macro magic!\n"); \
 	printf("Really!");
@@ -18,6 +16,13 @@
 #define SUPER_SPECIAL_MACRO2 \
 	MACRO_MAGIC              \
 	printf("Plus some extra!\n")
+
+#define M(a, b) printf("%d", a##b);
+#define M2(a, b) #a##b
+
+M(abc, def)
+
+M2(blahde, dah)
 
 namespace Parser
 {

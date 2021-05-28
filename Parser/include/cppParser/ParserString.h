@@ -26,6 +26,7 @@ namespace CppParser
 
 		void Append(const char* strToAppend);
 		void Append(char character);
+		char Pop();
 		const char* c_str();
 		const char* c_str_copy();
 

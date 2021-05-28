@@ -290,6 +290,10 @@ namespace CppParser
 
 			List<const char*> functionIdentifierReplacements;
 			Token token = ScriptScanner::ScanToken(data.Scanner, true);
+			if (token.m_Type != TokenType::LEFT_PAREN)
+			{
+				printf("HERE");
+			}
 			Logger::Assert(token.m_Type == TokenType::LEFT_PAREN, "Macro function must begin with a left parenthesis.");
 
 			int grouping = 1;
@@ -299,7 +303,7 @@ namespace CppParser
 				StringBuilder sb;
 				while (!ScriptScanner::AtEnd(data.Scanner))
 				{
-					token = ScriptScanner::ScanToken(data.Scanner, true);
+					token = ScriptScanner::ScanToken(data.Scanner);
 					if (token.m_Type == TokenType::LEFT_PAREN)
 					{
 						grouping++;
@@ -327,13 +331,14 @@ namespace CppParser
 
 			// Create the final string by replacing all function identifiers with the appropriate replacement
 			StringBuilder sb;
-			for (const Token& token : replacementListResult)
+			for (int tokenIndex = 0; tokenIndex < replacementListResult.size(); tokenIndex++)
 			{
+				Token token = replacementListResult[tokenIndex];
 				int functionIdentifierSlot = -1;
 				int index = 0;
 				for (const Token& functionId : functionIdentifiers)
 				{
-					if (ParserString::Compare(token.m_Lexeme, functionId.m_Lexeme))
+					if (token.m_Type == TokenType::IDENTIFIER && ParserString::Compare(token.m_Lexeme, functionId.m_Lexeme))
 					{
 						functionIdentifierSlot = index;
 						break;
@@ -348,7 +353,48 @@ namespace CppParser
 				}
 				else
 				{
-					ScriptScanner::AppendTokenToStringBuilder(sb, token);
+					if (token.m_Type == TokenType::HASHTAG)
+					{
+						tokenIndex++;
+						Token nextToken = replacementListResult[tokenIndex];
+						if (nextToken.m_Type == TokenType::HASHTAG)
+						{
+							sb.Pop();
+						}
+						else
+						{
+							sb.Append('"');
+
+							functionIdentifierSlot = -1;
+							index = 0;
+							for (const Token& functionId : functionIdentifiers)
+							{
+								if (nextToken.m_Type == TokenType::IDENTIFIER && ParserString::Compare(nextToken.m_Lexeme, functionId.m_Lexeme))
+								{
+									functionIdentifierSlot = index;
+									break;
+								}
+								index++;
+							}
+							if (functionIdentifierSlot != -1)
+							{
+								Logger::AssertCritical(functionIdentifierSlot < functionIdentifierReplacements.size(), "Invalid function id slot. We should never hit this exception...");
+								sb.Append(functionIdentifierReplacements[functionIdentifierSlot]);
+								sb.Pop();
+							}
+							else
+							{
+								ScriptScanner::AppendTokenToStringBuilder(sb, nextToken);
+							}
+
+							sb.Append('"');
+							sb.Append(" ");
+						}
+					}
+					else
+					{
+						ScriptScanner::AppendTokenToStringBuilder(sb, token);
+					}
 				}
 			}
 
