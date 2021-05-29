@@ -40,20 +40,20 @@ namespace CppParser
 		CountingFileStream CountingFileStreamReadFromString(const char* source);
 		void CloseCountingFileStreamRead(CountingFileStream& stream);
 		char StreamReadChar(CountingFileStream& stream);
-		char StreamCharAt(const CountingFileStream& stream, int index);
-		char StreamPeek(const CountingFileStream& stream, int numBytesToPeekAhead);
+		char StreamCharAt(CountingFileStream& stream, int index);
+		char StreamPeek(CountingFileStream& stream, int numBytesToPeekAhead);
 		void StreamGoTo(CountingFileStream& stream, int newCursorPosition);
-		const char* StreamSubstring(const CountingFileStream& stream, int start, int size);
+		const char* StreamSubstring(CountingFileStream& stream, int start, int size);
 		bool StreamAtEnd(const CountingFileStream& stream);
 
 		FileStream OpenFileStreamRead(const char* filepath);
 		FileStream FileStreamReadFromString(const char* source);
 		void CloseFileStreamRead(FileStream& stream);
 		char StreamReadChar(FileStream& stream);
-		char StreamCharAt(const FileStream& stream, int index);
-		char StreamPeek(const FileStream& stream, int numBytesToPeekAhead);
+		char StreamCharAt(FileStream& stream, int index);
+		char StreamPeek(FileStream& stream, int numBytesToPeekAhead);
 		void StreamGoTo(FileStream& stream, int newCursorPosition);
-		const char* StreamSubstring(const FileStream& stream, int start, int size);
+		const char* StreamSubstring(FileStream& stream, int start, int size);
 		bool StreamAtEnd(const FileStream& stream);
 
 		FileStream OpenFileStreamWrite(const char* filepath);

@@ -107,12 +107,12 @@ namespace CppParser
 			return c;
 		}
 
-		char StreamCharAt(const CountingFileStream& stream, int index)
+		char StreamCharAt(CountingFileStream& stream, int index)
 		{
 			return StreamCharAt(stream.Stream, index);
 		}
 
-		char StreamPeek(const CountingFileStream& stream, int numBytesToPeekAhead)
+		char StreamPeek(CountingFileStream& stream, int numBytesToPeekAhead)
 		{
 			return StreamPeek(stream.Stream, numBytesToPeekAhead);
 		}
@@ -167,7 +167,7 @@ namespace CppParser
 			StreamGoTo(stream.Stream, newCursorPosition);
 		}
 
-		const char* StreamSubstring(const CountingFileStream& stream, int start, int size)
+		const char* StreamSubstring(CountingFileStream& stream, int start, int size)
 		{
 			return StreamSubstring(stream.Stream, start, size);
 		}
@@ -180,6 +180,7 @@ namespace CppParser
 		FileStream FileStreamReadFromString(const char* source)
 		{
 			Logger::AssertCritical(source != nullptr, "Invalid file stream source");
+			Logger::AssertCritical(ParserString::StringLength(source) < STREAM_BUFFER_SIZE, "Invalid source string length. Length must be shorter than '%d' characters", STREAM_BUFFER_SIZE);
 
 			FileStream res;
 			res.Type = StreamType::Read;
@@ -277,17 +278,18 @@ namespace CppParser
 			return c;
 		}
 
-		char StreamCharAt(const FileStream& file, int index)
+		char StreamCharAt(FileStream& file, int index)
 		{
 			Logger::AssertCritical(file.Type == StreamType::Read, "Invalid file stream. This function is only valid for read file streams.");
 
-			FileStream streamShallowCopy = file;
-			streamShallowCopy.Cursor = index;
-			char c = StreamReadChar(streamShallowCopy);
+			int64_t ogCursor = file.Cursor;
+			file.Cursor = index;
+			char c = StreamReadChar(file);
+			StreamGoTo(file, ogCursor);
 			return c;
 		}
 
-		char StreamPeek(const FileStream& file, int numBytesToPeekAhead)
+		char StreamPeek(FileStream& file, int numBytesToPeekAhead)
 		{
 			Logger::AssertCritical(file.Type == StreamType::Read, "Invalid file stream. This function is only valid for read file streams.");
 
@@ -296,14 +298,15 @@ namespace CppParser
 				return '\0';
 			}
 
-			if (numBytesToPeekAhead == 0)
+			if (numBytesToPeekAhead == 0 && (file.Cursor - file.ChunkStart) < STREAM_BUFFER_SIZE)
 			{
 				return file.Data[file.Cursor - file.ChunkStart];
 			}
 
-			FileStream streamShallowCopy = file;
-			streamShallowCopy.Cursor += numBytesToPeekAhead;
-			char c = StreamReadChar(streamShallowCopy);
+			int64_t ogCursor = file.Cursor;
+			file.Cursor += numBytesToPeekAhead;
+			char c = StreamReadChar(file);
+			StreamGoTo(file, ogCursor);
 			return c;
 		}
 
@@ -315,20 +318,15 @@ namespace CppParser
 			StreamReadChunk(file, 1);
 		}
 
-		const char* StreamSubstring(const FileStream& file, int start, int size)
+		const char* StreamSubstring(FileStream& file, int start, int size)
 		{
 			Logger::AssertCritical(file.Type == StreamType::Read, "Invalid file stream. This function is only valid for read file streams.");
-
-			if (size >= STREAM_BUFFER_SIZE)
-			{
-				printf("HERE");
-			}
 			Logger::AssertCritical(size < STREAM_BUFFER_SIZE, "This File I/O library does not support substrings greater than '%d' characters right now.", STREAM_BUFFER_SIZE);
-			FileStream streamShallowCopy = file;
-			streamShallowCopy.Cursor = start;
-			StreamReadChunk(streamShallowCopy, size);
-			const char* substring = ParserString::Substring(streamShallowCopy.Data, start - streamShallowCopy.ChunkStart, size);
-			StreamGoTo(streamShallowCopy, file.Cursor);
+			int64_t ogCursor = file.Cursor;
+			file.Cursor = start;
+			StreamReadChunk(file, size);
+			const char* substring = ParserString::Substring(file.Data, start - file.ChunkStart, size);
+			StreamGoTo(file, ogCursor);
 			return substring;
 		}
 
@@ -389,22 +387,33 @@ namespace CppParser
 		// Internal functions
 		static void StreamReadChunk(FileStream& file, int numBytesToRead, bool forceRead)
 		{
-			if (!(file.Cursor >= 0 && file.Cursor <= file.Size))
+			if (!(file.Cursor >= 0 && file.Cursor <= file.Size && numBytesToRead < STREAM_BUFFER_SIZE))
 			{
 				printf("HERE");
 			}
-			Logger::AssertCritical(file.Cursor >= 0 && file.Cursor <= file.Size, "Invalid chunk cursor boundaries in file stream. 377");
+			Logger::AssertCritical(file.Cursor >= 0 && file.Cursor <= file.Size && numBytesToRead < STREAM_BUFFER_SIZE, "Invalid chunk cursor boundaries in file stream. 377");
 			if (!file.fp)
 			{
 				return;
 			}
 
 			// Only read file contents if the file cursor is out of bounds of our "view" of the file
-			if (forceRead || file.Cursor + numBytesToRead >= file.ChunkStart + STREAM_BUFFER_SIZE || file.Cursor < file.ChunkStart)
+			if (forceRead || file.Cursor + numBytesToRead > file.ChunkStart + STREAM_BUFFER_SIZE || file.Cursor < file.ChunkStart || file.Cursor + numBytesToRead < file.ChunkStart)
 			{
 				Logger::AssertCritical(file.Cursor >= 0 && file.Cursor < file.Size, "Invalid file chunk to read.");
-				fseek(file.fp, file.Cursor, SEEK_SET);
-				file.ChunkStart = file.Cursor;
+				int64_t seekLocation = file.Cursor;
+				// Attempt to keep the last line in memory if it's small enough (we'll use 256 as our max line size to keep in memory)
+				for (int64_t i = file.Cursor; i > file.Cursor - 256; i--)
+				{
+					if (file.Data[i - file.ChunkStart] == '\n')
+					{
+						seekLocation = i;
+						break;
+					}
+				}
+
+				fseek(file.fp, seekLocation, SEEK_SET);
+				file.ChunkStart = seekLocation;
 
 				size_t numBytesToRead = STREAM_BUFFER_SIZE > file.Size - file.Cursor ? file.Size - file.Cursor : STREAM_BUFFER_SIZE;
 				size_t elementsRead = fread(file.Data, numBytesToRead, 1, file.fp);

@@ -19,10 +19,7 @@
 
 #define M(a, b) printf("%d", a##b);
 #define M2(a, b) #a##b
-
-M(abc, def)
-
-M2(blahde, dah)
+#define VARIADIC(...) __VA_ARGS__
 
 namespace Parser
 {
@@ -31,12 +28,18 @@ namespace Parser
 	public:
 		Test()
 		{
+			printf("%d %d %d %d", VARIADIC(1, 2, 3, 4));
+
 			MACRO_MAGIC
 			FUN_MACRO_MAGIC(1, 2, 3);
 			FUN_MACRO_MAGIC([ x = y, b = 2 ], abc);
 
 			SUPER_SPECIAL_MACRO("hello", "there");
 			SUPER_SPECIAL_MACRO2;
+
+			M(abc, def)
+
+			M2(blahde, dah)
 		}
 
 		~Test();

@@ -305,6 +305,10 @@ namespace CppParser
 			{
 				return;
 			}
+			else if (node->type == PreprocessingAstNodeType::None)
+			{
+				return;
+			}
 			else
 			{
 				Logger::Warning("Ran into non-identifier in macro function identifier list.");
@@ -327,13 +331,10 @@ namespace CppParser
 
 			// Replace function identifiers here
 			Parser::WalkPreprocessingTree(preprocessingNode, (void*)&replacementListResult, MacroAddToReplacementList);
+			bool endsInVariadicMacro = preprocessingNode->macroDefineFunction.endsInVariadicMacro;
 
 			List<const char*> functionIdentifierReplacements;
 			Token token = ScriptScanner::ScanToken(data.Scanner, true);
-			if (token.m_Type != TokenType::LEFT_PAREN)
-			{
-				printf("HERE");
-			}
 			Logger::Assert(token.m_Type == TokenType::LEFT_PAREN, "Macro function must begin with a left parenthesis.");
 
 			int grouping = 1;
@@ -405,6 +406,21 @@ namespace CppParser
 				{
 					Logger::AssertCritical(functionIdentifierSlot < functionIdentifierReplacements.size(), "Invalid function id slot. We should never hit this exception...");
 					sb.Append(functionIdentifierReplacements[functionIdentifierSlot]);
+				}
+				else if (ParserString::Compare(token.m_Lexeme, "__VA_ARGS__"))
+				{
+					Logger::AssertCritical(endsInVariadicMacro, "Cannot expand variadic argument in macro that does not contain an elipsis '...' in macro '%s'", preprocessingNode->macroDefineFunction.identifier.m_Lexeme);
+					int index = 0;
+					for (const char* funcReplacement : functionIdentifierReplacements)
+					{
+						sb.Append(funcReplacement);
+						if (index != functionIdentifierReplacements.size() - 1)
+						{
+							sb.Append(',');
+							sb.Append(' ');
+						}
+						index++;
+					}
 				}
 				else
 				{

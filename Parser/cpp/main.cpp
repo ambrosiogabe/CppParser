@@ -44,10 +44,6 @@ int main()
 		std::vector<std::filesystem::path> includeDirs = {};		
 
 		const char* fileToTest = "testParser.cpp";
-		List<Token> tokens = ScriptScanner::ScanTokens(fileToTest);
-		ScriptScanner::DebugPrint(tokens);
-		ScriptScanner::FreeTokens(tokens);
-
 		ParserData parserData = Parser::Parse(fileToTest, includeDirs, osDefinitions);
 		//Parser::WalkTree(parseTree, CppParser::PrintClasses, false, AstNodeType::ClassVirtualHead);
 		Parser::FreeParserData(parserData);

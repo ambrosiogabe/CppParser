@@ -31,17 +31,17 @@ namespace CppParser
 			return c;
 		}
 
-		static inline char Peek(const ScannerData& data)
+		static inline char Peek(ScannerData& data)
 		{
 			return FileIO::StreamPeek(data.Stream, 0);
 		}
 
-		static inline char PeekNext(const ScannerData& data)
+		static inline char PeekNext(ScannerData& data)
 		{
 			return FileIO::StreamPeek(data.Stream, 1);
 		}
 
-		static inline char PeekNextNext(const ScannerData& data)
+		static inline char PeekNextNext(ScannerData& data)
 		{
 			return FileIO::StreamPeek(data.Stream, 2);
 		}
@@ -55,7 +55,7 @@ namespace CppParser
 			return true;
 		}
 
-		static inline char PeekPrevious(const ScannerData& data, int amount)
+		static inline char PeekPrevious(ScannerData& data, int amount)
 		{
 			return FileIO::StreamPeek(data.Stream, -amount);
 		}
@@ -87,12 +87,24 @@ namespace CppParser
 
 		static inline Token GenerateToken(const ScannerData& data, TokenType m_Type, const char* lexeme)
 		{
-			return Token{
-				data.Stream.Line,
-				data.Stream.Column - (int)(data.Stream.Stream.Cursor - data.Start),
-				m_Type,
-				ParserString::CreateString(lexeme)
-			};
+			if (m_Type != TokenType::NEWLINE)
+			{
+				return Token{
+					data.Stream.Line,
+					data.Stream.Column - (int)(data.Stream.Stream.Cursor - data.Start),
+					m_Type,
+					ParserString::CreateString(lexeme)
+				};
+			}
+			else
+			{
+				return Token{
+					data.Stream.Line - 1,
+					data.Stream.Column - (int)(data.Stream.Stream.Cursor - data.Start),
+					m_Type,
+					ParserString::CreateString(lexeme)
+				};
+			}
 		}
 
 		inline Token GenerateErrorToken(const ScannerData& data)
@@ -486,8 +498,6 @@ namespace CppParser
 
 		Token ScanToken(ScannerData& scannerData, bool includeWhitespace)
 		{
-			int line = scannerData.Stream.Line;
-			int column = scannerData.Stream.Column;
 			Token token = ScanTokenInternal(scannerData);
 			while ((!includeWhitespace && (token.m_Type == TokenType::WHITESPACE || token.m_Type == TokenType::COMMENT)) || token.m_Type == TokenType::ERROR_TYPE)
 			{
@@ -498,20 +508,16 @@ namespace CppParser
 						ParserString::FreeString(token.m_Lexeme);
 					}
 				}
-				line = scannerData.Stream.Line;
-				column = scannerData.Stream.Column;
 				token = ScanTokenInternal(scannerData);
 			}
 
-			token.m_Line = line;
-			token.m_Column = column;
 			return token;
 		}
 
-		TokenType PeekToken(const ScannerData& scannerData, bool includeWhitespace)
+		TokenType PeekToken(ScannerData& scannerData, bool includeWhitespace)
 		{
-			ScannerData shallowCopyScannerData = scannerData;
-			Token token = ScanTokenInternal(shallowCopyScannerData);
+			int ogCursor = scannerData.Stream.Stream.Cursor;
+			Token token = ScanTokenInternal(scannerData);
 			while ((!includeWhitespace && (token.m_Type == TokenType::WHITESPACE || token.m_Type == TokenType::COMMENT)) || token.m_Type == TokenType::ERROR_TYPE)
 			{
 				if (!includeWhitespace)
@@ -521,11 +527,11 @@ namespace CppParser
 						ParserString::FreeString(token.m_Lexeme);
 					}
 				}
-				token = ScanTokenInternal(shallowCopyScannerData);
+				token = ScanTokenInternal(scannerData);
 			}
 
 			ParserString::FreeString(token.m_Lexeme);
-			FileIO::StreamGoTo(shallowCopyScannerData.Stream, scannerData.Stream.Stream.Cursor);
+			FileIO::StreamGoTo(scannerData.Stream, ogCursor);
 			return token.m_Type;
 		}
 

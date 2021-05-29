@@ -23,7 +23,7 @@ namespace CppParser
 
 		List<Token> ScanTokens(const char* filepath, bool includeWhitespace = false);
 		Token ScanToken(ScannerData& scannerData, bool includeWhitespace = false);
-		TokenType PeekToken(const ScannerData& scannerData, bool includeWhitespace = false);
+		TokenType PeekToken(ScannerData& scannerData, bool includeWhitespace = false);
 
 		void DebugPrint(const List<Token>& tokens, bool printLineAndCol = true, bool printWhitespace = false);
 		void WriteTokensToFile(const List<Token>& tokens, const char* filename);

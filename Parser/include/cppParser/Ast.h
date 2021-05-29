@@ -1954,6 +1954,7 @@ namespace CppParser
 		Token identifier;
 		PreprocessingAstNode* identifierList;
 		PreprocessingAstNode* replacementList;
+		bool endsInVariadicMacro;
 	};
 
 	struct MacroDefineNode
