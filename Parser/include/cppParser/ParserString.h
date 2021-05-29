@@ -17,6 +17,7 @@ namespace CppParser
 		const char* Join(const char* str1, const char* str2);
 		const char* Copy(const char* strToCopy);
 		const char* Copy(const char* strToCopy, int numCharactersToCopy);
+		bool IsWhitespace(char c);
 	}
 
 	class StringBuilder
@@ -29,6 +30,10 @@ namespace CppParser
 		char Pop();
 		const char* c_str();
 		const char* c_str_copy();
+		void StripWhitespace();
+		char CharAt(int index);
+		int Size();
+		void RemoveCharAt(int index);
 
 	private:
 		List<char> contents;

@@ -133,6 +133,11 @@ namespace CppParser
 				FreeMem((void*)str);
 			}
 		}
+
+		bool IsWhitespace(char c)
+		{
+			return c == ' ' || c == '\t' || c == '\n' || c == '\r';
+		}
 	}
 
 	StringBuilder::StringBuilder()
@@ -174,5 +179,50 @@ namespace CppParser
 	{
 		const char* copy = ParserString::CreateString(c_str());
 		return copy;
+	}
+
+	void StringBuilder::StripWhitespace()
+	{
+		for (int i = 0; i < contents.size(); i++)
+		{
+			if (ParserString::IsWhitespace(contents[i]))
+			{
+				contents.removeByIndex(i);
+				i--;
+			}
+			else
+			{
+				break;
+			}
+		}
+
+		for (int i = contents.size() - 1; i >= 0; i--)
+		{
+			if (ParserString::IsWhitespace(contents[i]))
+			{
+				contents.pop();
+			}
+			else
+			{
+				break;
+			}
+		}
+	}
+
+	char StringBuilder::CharAt(int index)
+	{
+		Logger::AssertCritical(index >= 0 && index < contents.size(), "Invalid char index '%d' in string builder of size '%d'", index, contents.size());
+		return contents[index];
+	}
+
+	void StringBuilder::RemoveCharAt(int index)
+	{
+		Logger::AssertCritical(index >= 0 && index < contents.size(), "Invalid char index '%d' in string builder of size '%d'", index, contents.size());
+		contents.removeByIndex(index);
+	}
+
+	int StringBuilder::Size()
+	{
+		return contents.size();
 	}
 }

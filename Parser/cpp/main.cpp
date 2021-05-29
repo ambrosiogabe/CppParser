@@ -41,7 +41,7 @@ int main()
 		osDefinitions |= LINUX_DEFINED ? (int)PredefinedMacros::Linux : (int)PredefinedMacros::None;
 		osDefinitions |= UNIX_DEFINED ? (int)PredefinedMacros::Unix : (int)PredefinedMacros::None;
 		osDefinitions |= FREE_BSD_DEFINED ? (int)PredefinedMacros::FreeBSD : (int)PredefinedMacros::None;
-		std::vector<std::filesystem::path> includeDirs = {};
+		std::vector<std::filesystem::path> includeDirs = {};		
 
 		const char* fileToTest = "testParser.cpp";
 		List<Token> tokens = ScriptScanner::ScanTokens(fileToTest);

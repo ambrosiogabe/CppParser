@@ -28,8 +28,6 @@ namespace CppParser
 		void DebugPrint(const List<Token>& tokens, bool printLineAndCol = true, bool printWhitespace = false);
 		void WriteTokensToFile(const List<Token>& tokens, const char* filename);
 		const char* TokenName(TokenType type);
-		void AppendTokenToStringBuilder(StringBuilder& sb, const Token& token);
-		void AppendTokenToStream(FileStream& stream, const Token& token);
 
 		void FreeTokens(List<Token>& tokens);
 

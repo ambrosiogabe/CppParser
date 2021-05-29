@@ -105,13 +105,13 @@ namespace CppParser
 			};
 		}
 
-		inline Token GenerateWhitespaceToken()
+		inline Token GenerateWhitespaceToken(const char* c)
 		{
 			return Token{
 				-1,
 				-1,
 				TokenType::WHITESPACE,
-				ParserString::CreateString("")
+				ParserString::CreateString(c)
 			};
 		}
 
@@ -477,8 +477,8 @@ namespace CppParser
 					tokens.push(token);
 			}
 
-			tokens.push(Token{ -1, data.Stream.Column, TokenType::NEWLINE, ParserString::CreateString("\\n") });
-			tokens.push(Token{ -1, data.Stream.Column, TokenType::END_OF_FILE, ParserString::CreateString("EOF") });
+			tokens.push(Token{ data.Stream.Line, data.Stream.Column, TokenType::NEWLINE, ParserString::CreateString("\\n") });
+			tokens.push(Token{ data.Stream.Line, data.Stream.Column, TokenType::END_OF_FILE, ParserString::CreateString("EOF") });
 
 			CloseScanner(data);
 			return tokens;
@@ -486,6 +486,8 @@ namespace CppParser
 
 		Token ScanToken(ScannerData& scannerData, bool includeWhitespace)
 		{
+			int line = scannerData.Stream.Line;
+			int column = scannerData.Stream.Column;
 			Token token = ScanTokenInternal(scannerData);
 			while ((!includeWhitespace && (token.m_Type == TokenType::WHITESPACE || token.m_Type == TokenType::COMMENT)) || token.m_Type == TokenType::ERROR_TYPE)
 			{
@@ -496,9 +498,13 @@ namespace CppParser
 						ParserString::FreeString(token.m_Lexeme);
 					}
 				}
+				line = scannerData.Stream.Line;
+				column = scannerData.Stream.Column;
 				token = ScanTokenInternal(scannerData);
 			}
 
+			token.m_Line = line;
+			token.m_Column = column;
 			return token;
 		}
 
@@ -554,40 +560,6 @@ namespace CppParser
 					Logger::Assert(iter != tokenTypeToString.end(), "Invalid token while debug printing.");
 					Logger::Info("Line: %d:%d Token<%s>: %s", token->m_Line, token->m_Column, iter->second, token->m_Lexeme);
 				}
-			}
-		}
-
-		void AppendTokenToStringBuilder(StringBuilder& sb, const Token& token)
-		{
-			if (token.m_Type == TokenType::STRING_LITERAL)
-			{
-				sb.Append('"');
-				sb.Append(token.m_Lexeme);
-				sb.Append('"');
-			}
-			else
-			{
-				sb.Append(token.m_Lexeme);
-			}
-
-			if (token.m_Type != TokenType::LEFT_CURLY_BRACKET && token.m_Type != TokenType::RIGHT_CURLY_BRACKET && token.m_Type != TokenType::LEFT_BRACKET &&
-				token.m_Type != TokenType::LEFT_PAREN && token.m_Type != TokenType::LEFT_ANGLE_BRACKET &&
-				token.m_Type != TokenType::COLON && token.m_Type != TokenType::SEMICOLON && token.m_Type != TokenType::DOT && token.m_Type != TokenType::ARROW &&
-				token.m_Type != TokenType::TILDE && token.m_Type != TokenType::BANG && token.m_Type != TokenType::PLUS_PLUS && token.m_Type != TokenType::MINUS_MINUS)
-			{
-				sb.Append(' ');
-			}
-		}
-
-		void AppendTokenToStream(FileStream& stream, const Token& token)
-		{
-			FileIO::WriteToStream(stream, token.m_Lexeme);
-			if (token.m_Type != TokenType::LEFT_CURLY_BRACKET && token.m_Type != TokenType::RIGHT_CURLY_BRACKET && token.m_Type != TokenType::LEFT_BRACKET &&
-				token.m_Type != TokenType::LEFT_PAREN && token.m_Type != TokenType::LEFT_ANGLE_BRACKET &&
-				token.m_Type != TokenType::COLON && token.m_Type != TokenType::SEMICOLON && token.m_Type != TokenType::DOT && token.m_Type != TokenType::ARROW &&
-				token.m_Type != TokenType::TILDE && token.m_Type != TokenType::BANG && token.m_Type != TokenType::PLUS_PLUS && token.m_Type != TokenType::MINUS_MINUS)
-			{
-				FileIO::WriteToStream(stream, " ");
 			}
 		}
 
@@ -880,16 +852,17 @@ namespace CppParser
 				return PropertyIdentifier(data);
 			}
 			case ' ':
+				return GenerateWhitespaceToken(" ");
 			case '\r':
 				// Ignore whitespace
-				return GenerateWhitespaceToken();
+				return GenerateWhitespaceToken(" ");
 			case '\t':
-				return GenerateWhitespaceToken();
+				return GenerateWhitespaceToken("\t");
 			case '\n':
 				// Record the new line, then continue
 				if (PeekPrevious(data, 2) == '\\' || (PeekPrevious(data, 2) == '\r' && PeekPrevious(data, 3) == '\\'))
 				{
-					return GenerateWhitespaceToken();
+					return GenerateWhitespaceToken(" ");
 				}
 				return GenerateToken(data, TokenType::NEWLINE, "\\n");
 			default:

@@ -230,9 +230,35 @@ namespace CppParser
 				{
 					replacementListResult.push(Token{ -1, -1, TokenType::NEWLINE, "\n" });
 				}
+				else if (ppToken->type == PreprocessingAstNodeType::Whitespace)
+				{
+					replacementListResult.push(ppToken->whitespace.token);
+				}
 				else
 				{
 					Logger::Warning("Unknown replacement list preprocessing token while expanding macro.");
+				}
+			}
+		}
+
+		static void CondenseWhitespace(StringBuilder& sb)
+		{
+			for (int i = 0; i < sb.Size(); i++)
+			{
+				if (sb.CharAt(i) == ' ' || sb.CharAt(i) == '\t')
+				{
+					i++;
+					while (i < sb.Size() && (sb.CharAt(i) == ' ' || sb.CharAt(i) == '\t'))
+					{
+						sb.RemoveCharAt(i);
+					}
+					i--;
+				}
+
+				if (i < sb.Size() && sb.CharAt(i) == '\n')
+				{
+					sb.RemoveCharAt(i);
+					i--;
 				}
 			}
 		}
@@ -246,9 +272,23 @@ namespace CppParser
 			for (Token& token : replacementListResult)
 			{
 				token.m_Line = newLine;
-				ScriptScanner::AppendTokenToStringBuilder(sb, token);
+				if (token.m_Type == TokenType::STRING_LITERAL)
+				{
+					sb.Append('"');
+					sb.Append(token.m_Lexeme);
+					sb.Append('"');
+				}
+				else if (token.m_Type == TokenType::NEWLINE)
+				{
+					sb.Append(' ');
+				}
+				else
+				{
+					sb.Append(token.m_Lexeme);
+				}
 			}
 
+			CondenseWhitespace(sb);
 			return sb.c_str_copy();
 		}
 
@@ -303,7 +343,7 @@ namespace CppParser
 				StringBuilder sb;
 				while (!ScriptScanner::AtEnd(data.Scanner))
 				{
-					token = ScriptScanner::ScanToken(data.Scanner);
+					token = ScriptScanner::ScanToken(data.Scanner, true);
 					if (token.m_Type == TokenType::LEFT_PAREN)
 					{
 						grouping++;
@@ -320,8 +360,23 @@ namespace CppParser
 					{
 						break;
 					}
-					ScriptScanner::AppendTokenToStringBuilder(sb, token);
+
+					if (token.m_Type == TokenType::STRING_LITERAL)
+					{
+						sb.Append('"');
+						sb.Append(token.m_Lexeme);
+						sb.Append('"');
+					}
+					else if (token.m_Type == TokenType::NEWLINE)
+					{
+						sb.Append(' ');
+					}
+					else
+					{
+						sb.Append(token.m_Lexeme);
+					}
 				}
+				sb.StripWhitespace();
 				functionIdentifierReplacements.push(sb.c_str_copy());
 			}
 
@@ -357,11 +412,7 @@ namespace CppParser
 					{
 						tokenIndex++;
 						Token nextToken = replacementListResult[tokenIndex];
-						if (nextToken.m_Type == TokenType::HASHTAG)
-						{
-							sb.Pop();
-						}
-						else
+						if (nextToken.m_Type != TokenType::HASHTAG)
 						{
 							sb.Append('"');
 
@@ -380,20 +431,31 @@ namespace CppParser
 							{
 								Logger::AssertCritical(functionIdentifierSlot < functionIdentifierReplacements.size(), "Invalid function id slot. We should never hit this exception...");
 								sb.Append(functionIdentifierReplacements[functionIdentifierSlot]);
-								sb.Pop();
 							}
 							else
 							{
-								ScriptScanner::AppendTokenToStringBuilder(sb, nextToken);
+								sb.Append(nextToken.m_Lexeme);
 							}
 
 							sb.Append('"');
-							sb.Append(" ");
 						}
 					}
 					else
 					{
-						ScriptScanner::AppendTokenToStringBuilder(sb, token);
+						if (token.m_Type == TokenType::STRING_LITERAL)
+						{
+							sb.Append('"');
+							sb.Append(token.m_Lexeme);
+							sb.Append('"');
+						}
+						else if (token.m_Type == TokenType::NEWLINE)
+						{
+							sb.Append(' ');
+						}
+						else
+						{
+							sb.Append(token.m_Lexeme);
+						}
 					}
 				}
 			}
@@ -403,6 +465,7 @@ namespace CppParser
 				ParserString::FreeString(str);
 			}
 
+			CondenseWhitespace(sb);
 			return sb.c_str_copy();
 		}
 	}

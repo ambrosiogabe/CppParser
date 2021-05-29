@@ -1156,24 +1156,24 @@ namespace CppParser
 			if (writePPTokensToFile)
 			{
 				FileIO::WriteToStream(data.PreprocessOutputStream, lexeme);
-				if (ParserString::Compare(lexeme, "\n"))
-				{
-					for (int i = 0; i < data.indentLevel; i++)
-					{
-						FileIO::WriteToStream(data.PreprocessOutputStream, "\t");
-					}
-				}
+				//if (ParserString::Compare(lexeme, "\n"))
+				//{
+				//	for (int i = 0; i < data.indentLevel; i++)
+				//	{
+				//		FileIO::WriteToStream(data.PreprocessOutputStream, "\t");
+				//	}
+				//}
 			}
 		}
 
-		static bool Match(ParserData& data, TokenType type)
+		static bool Match(ParserData& data, TokenType type, bool includeWhitespace = false)
 		{
 			if (AtEnd(data))
 			{
 				return false;
 			}
 			int backtrackPosition = data.Scanner.Stream.Stream.Cursor;
-			Token currentToken = ScriptScanner::ScanToken(data.Scanner);
+			Token currentToken = ScriptScanner::ScanToken(data.Scanner, includeWhitespace);
 			if (currentToken.m_Type == type)
 			{
 				// We aren't concerned with the lexeme here, so just free the result
@@ -1204,9 +1204,9 @@ namespace CppParser
 			return false;
 		}
 
-		static Token ConsumeCurrent(ParserData& data, TokenType type)
+		static Token ConsumeCurrent(ParserData& data, TokenType type, bool includeWhitespace = false)
 		{
-			Token currentToken = ScriptScanner::ScanToken(data.Scanner);
+			Token currentToken = ScriptScanner::ScanToken(data.Scanner, includeWhitespace);
 			if (currentToken.m_Type == type)
 			{
 				return currentToken;
@@ -1228,9 +1228,9 @@ namespace CppParser
 				type == TokenType::AND_EQUAL || type == TokenType::CARET_EQUAL || type == TokenType::PIPE_EQUAL;
 		}
 
-		static TokenType Peek(const ParserData& data)
+		static TokenType Peek(const ParserData& data, bool includeWhitespace = false)
 		{
-			return ScriptScanner::PeekToken(data.Scanner);
+			return ScriptScanner::PeekToken(data.Scanner, includeWhitespace);
 		}
 
 		static bool PeekIn(ParserData& data, std::initializer_list<TokenType> tokenTypes)
@@ -3299,6 +3299,13 @@ result->type = pType;
 			return result;
 		}
 
+		static PreprocessingAstNode* GenerateWhitespaceNode(Token token)
+		{
+			PreprocessingAstNode* result = GeneratePreprocessingAstNode(PreprocessingAstNodeType::Whitespace);
+			result->whitespace.token = token;
+			return result;
+		}
+
 		// ===============================================================================================
 		// Parser Forward Declarations (internal)
 		// ===============================================================================================
@@ -3587,11 +3594,11 @@ result->type = pType;
 		static PreprocessingAstNode* ParseNonDirective(ParserData& data, bool writeToPPFile);
 		static PreprocessingAstNode* ParseIdentifierList(ParserData& data, bool writeToPPFile);
 		static PreprocessingAstNode* ParseReplacementList(ParserData& data, bool writeToPPFile);
-		static PreprocessingAstNode* ParsePPTokens(ParserData& data, bool writeToPPFile, bool isHeader);
+		static PreprocessingAstNode* ParsePPTokens(ParserData& data, bool writeToPPFile, bool isHeader, bool isMacroExpansion = false);
 		static PreprocessingAstNode* ParseNumberLiteral(ParserData& data, bool writeToPPFile);
 
 		// Preprocessor Stuff
-		static PreprocessingAstNode* ParsePreprocessingToken(ParserData& data, bool writeToPPFile, bool isHeader);
+		static PreprocessingAstNode* ParsePreprocessingToken(ParserData& data, bool writeToPPFile, bool isHeader, bool isMacroExpansion = false);
 		static PreprocessingAstNode* ParseHeaderName(ParserData& data, bool writeToPPFile);
 		static PreprocessingAstNode* ParseCharacterLiteral(ParserData& data, bool writeToPPFile);
 		static PreprocessingAstNode* ParseUserDefinedCharacterLiteral(ParserData& data, bool writeToPPFile);
@@ -9532,8 +9539,6 @@ result->type = pType;
 				PreprocessingAstNode* result = GenerateIdentifierNode(identifier);
 
 				Write(data, writeToPPFile, identifier);
-				Write(data, writeToPPFile, " ");
-
 				while (Match(data, TokenType::COMMA))
 				{
 					Write(data, writeToPPFile, ",");
@@ -9553,10 +9558,10 @@ result->type = pType;
 			return GenerateReplacementListNode(ppTokens);
 		}
 
-		static PreprocessingAstNode* ParsePPTokens(ParserData& data, bool writeToPPFile, bool isHeader)
+		static PreprocessingAstNode* ParsePPTokens(ParserData& data, bool writeToPPFile, bool isHeader, bool isMacroExpansion)
 		{
 			int backtrackPosition = data.Scanner.Stream.Stream.Cursor;
-			PreprocessingAstNode* result = ParsePreprocessingToken(data, writeToPPFile, isHeader);
+			PreprocessingAstNode* result = ParsePreprocessingToken(data, writeToPPFile, isHeader, isMacroExpansion);
 			if (!result->success)
 			{
 				FreePreprocessingNode(result);
@@ -9566,7 +9571,7 @@ result->type = pType;
 
 			if (!AtEnd(data) && result->type != PreprocessingAstNodeType::Newline)
 			{
-				PreprocessingAstNode* nextPPToken = ParsePPTokens(data, writeToPPFile, isHeader);
+				PreprocessingAstNode* nextPPToken = ParsePPTokens(data, writeToPPFile, isHeader, isMacroExpansion);
 				result = GeneratePPTokensNode(result, nextPPToken);
 			}
 
@@ -9584,7 +9589,6 @@ result->type = pType;
 			{
 				Token token = ConsumeCurrent(data, Peek(data));
 				Write(data, writeToPPFile, token);
-				Write(data, writeToPPFile, " ");
 				return GenerateNumberLiteralNode(token);
 			}
 
@@ -9592,12 +9596,19 @@ result->type = pType;
 		}
 
 		// Preprocessor Stuff
-		static PreprocessingAstNode* ParsePreprocessingToken(ParserData& data, bool writeToPPFile, bool isHeader)
+		static PreprocessingAstNode* ParsePreprocessingToken(ParserData& data, bool writeToPPFile, bool isHeader, bool isMacroExpansion)
 		{
 			if (Peek(data) == TokenType::NEWLINE || Peek(data) == TokenType::END_OF_FILE)
 			{
-				Write(data, writeToPPFile, "\n");
+				Write(data, writeToPPFile && !isMacroExpansion, "\n");
 				return GenerateNewlineNode();
+			}
+
+			if (Peek(data, true) == TokenType::WHITESPACE)
+			{
+				Token token = ConsumeCurrent(data, TokenType::WHITESPACE, true);
+				Write(data, writeToPPFile, token.m_Lexeme);
+				return GenerateWhitespaceNode(token);
 			}
 
 			int backtrackPosition = data.Scanner.Stream.Stream.Cursor;
@@ -9643,7 +9654,7 @@ result->type = pType;
 						});
 					data.Scanner = macroExpansionScanner;
 					// This should write the tokens out to the file
-					ParsePPTokens(data, writeToPPFile, false);
+					ParsePPTokens(data, writeToPPFile, false, true);
 					ScriptScanner::CloseScanner(macroExpansionScanner);
 					ParserString::FreeString(tokens);
 					data.Scanner = backupScanner;
@@ -9652,7 +9663,6 @@ result->type = pType;
 				{
 					Write(data, writeToPPFile, token);
 				}
-				Write(data, writeToPPFile, " ");
 				return GenerateIdentifierNode(token);
 			}
 
@@ -9692,7 +9702,6 @@ result->type = pType;
 			// it's not a newline and it's not an EOF token
 			Token token = ConsumeCurrent(data, Peek(data));
 			Write(data, writeToPPFile, token);
-			Write(data, writeToPPFile, " ");
 			return GenerateIdentifierNode(token);
 		}
 
@@ -9734,7 +9743,6 @@ result->type = pType;
 			{
 				Token token = ConsumeCurrent(data, TokenType::CHARACTER_LITERAL);
 				Write(data, writeToPPFile, token);
-				Write(data, writeToPPFile, " ");
 				return GenerateCharacterLiteralNode(token);
 			}
 			return GenerateNoSuccessPreprocessingAstNode();
@@ -9747,7 +9755,7 @@ result->type = pType;
 				Token stringLiteral = ConsumeCurrent(data, TokenType::STRING_LITERAL);
 				Write(data, writeToPPFile, "\"");
 				Write(data, writeToPPFile, stringLiteral);
-				Write(data, writeToPPFile, "\" ");
+				Write(data, writeToPPFile, "\"");
 				return GenerateStringLiteralNode(stringLiteral);
 			}
 
@@ -9766,19 +9774,7 @@ result->type = pType;
 				TokenType::COMMA }))
 			{
 				Token token = ConsumeCurrent(data, Peek(data));
-				if (writeToPPFile)
-				{
-					if (token.m_Type == TokenType::LEFT_CURLY_BRACKET)
-					{
-						data.indentLevel++;
-					}
-					else if (token.m_Type == TokenType::RIGHT_CURLY_BRACKET)
-					{
-						data.indentLevel--;
-						Write(data, true, "\n");
-					}
-					ScriptScanner::AppendTokenToStream(data.PreprocessOutputStream, token);
-				}
+				Write(data, writeToPPFile, token.m_Lexeme);
 				return GeneratePreprocessingOpOrPuncNode(token);
 			}
 

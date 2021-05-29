@@ -38,6 +38,7 @@ namespace CppParser
 		HeaderNameString,
 		EmptyMacro,
 		Newline,
+		Whitespace,
 		All,
 	};
 
@@ -2028,6 +2029,11 @@ namespace CppParser
 		Token opOrPunc;
 	};
 
+	struct WhitespaceNode
+	{
+		Token token;
+	};
+
 	struct PreprocessingAstNode
 	{
 		PreprocessingAstNode() {}
@@ -2067,6 +2073,7 @@ namespace CppParser
 			HeaderNameNode headerName;
 			HeaderNameStringNode headerNameString;
 			PreprocessingOpOrPunc preprocessingOpOrPunc;
+			WhitespaceNode whitespace;
 		};
 	};
 }

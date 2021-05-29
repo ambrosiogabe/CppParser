@@ -134,24 +134,24 @@ namespace CppParser
 
 				// Once we get to the appropriate line number, we need to find the beginning
 				// of the line to get the right column number
-				int lineStart = stream.Stream.Cursor;
-				while (lineStart > 0)
+				int lineStart = stream.Stream.Cursor - 1;
+				int cursorBegin = stream.Stream.Cursor;
+				while (lineStart >= 0)
 				{
 					StreamGoTo(stream.Stream, lineStart);
 					char c = StreamPeek(stream.Stream, 0);
 					if (c == '\n')
 					{
-						lineStart++;
 						break;
 					}
 					lineStart--;
 				}
 
-				stream.Column = stream.Stream.Cursor - lineStart;
+				stream.Column = cursorBegin - lineStart;
 			}
 			else if (newCursorPosition > stream.Stream.Cursor)
 			{
-				for (int i = stream.Stream.Cursor - 1; i < newCursorPosition; i++)
+				for (int i = stream.Stream.Cursor; i < newCursorPosition; i++)
 				{
 					StreamGoTo(stream.Stream, i);
 					char c = StreamPeek(stream.Stream, 0);
